@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# new add recommended by Claude 4.6 sonnet
+*.pyc
+*.pyo
+.DS_Store

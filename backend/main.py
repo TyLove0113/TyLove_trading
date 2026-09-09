@@ -31,7 +31,8 @@ def update_yfinance():
 
 def run_analysis(send_telegram=True):
     """執行完整分析，可選擇是否推送 Telegram"""
-    now = datetime.now()
+    from config import HK_TZ
+    now = datetime.now(HK_TZ)
     print(f"\n{'═'*55}")
     print(f"  🕐 執行分析：{now.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'═'*55}")
@@ -63,6 +64,8 @@ def run_closing_reminder():
 
 
 # ── 排程設定 ──────────────────────────────
+import os
+os.environ["TZ"] = "Asia/Hong_Kong"
 
 def setup_schedule():
     schedule.every().day.at("09:25").do(run_analysis)
@@ -85,7 +88,7 @@ def main():
     print("=" * 55)
     print("  🚀 港股日內交易系統 啟動")
     print(f"  版本：v0.2.0")
-    print(f"  時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  時間：{datetime.now(HK_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 55)
 
     # 1. 更新 yfinance
@@ -93,7 +96,7 @@ def main():
     update_yfinance()
 
     # 2. 發送啟動通知
-    send(f"🚀 港股交易系統已啟動\n{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    send(f"🚀 港股交易系統已啟動\n{datetime.now(HK_TZ).strftime('%Y-%m-%d %H:%M')}")
 
     # 3. 立即執行一次分析
     print("\n📊 執行初始分析...")

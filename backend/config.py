@@ -1,10 +1,11 @@
 import os
 from dotenv import load_dotenv
+import pytz 
 
 load_dotenv()
 
 # 香港時區
-HK_TZ = pytz.timezone("Asia/Hong_Kong")  # 加呢行
+HK_TZ = pytz.timezone("Asia/Hong_Kong") 
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

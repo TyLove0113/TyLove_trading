@@ -55,7 +55,7 @@
         <h1><span class="status-dot"></span>港股日內交易系統</h1>
         <div>
             <span id="clock" style="font-size:12px;color:#666;margin-right:12px"></span>
-            <button class="refresh-btn" onclick="loadData()">↻ 更新</button>
+            <button class="refresh-btn" onclick="triggerRefresh()">↻ 更新</button>
         </div>
     </div>
 
@@ -72,8 +72,9 @@
         setInterval(updateClock, 1000);
         updateClock();
 
+        // 熱力顏色
         function heatColor(pct) {
-            const a = Math.abs(pct);
+            var a = Math.abs(pct);
             if (pct > 0) {
                 if (a < 0.5) return ['rgba(30,142,90,0.12)', '#1E8E5A'];
                 if (a < 1.5) return ['rgba(30,142,90,0.28)', '#1E8E5A'];
@@ -96,7 +97,7 @@
         }
 
         function barColor(s, m) {
-            const p = s / m;
+            var p = s / m;
             if (p >= 0.8) return '#1E8E5A';
             if (p >= 0.6) return '#E8A33D';
             return '#C1272D';
@@ -109,31 +110,57 @@
         }
 
         function bar(score, max) {
-            const pct = Math.round(score / max * 100);
-            const color = barColor(score, max);
+            var pct   = Math.round(score / max * 100);
+            var color = barColor(score, max);
             return score + '/' + max +
                 '<div class="bar-bg"><div class="bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
         }
 
+        // 載入數據
         async function loadData() {
             try {
-                const res = await fetch('/api/analysis');
-                const data = await res.json();
+                var res  = await fetch('/api/analysis');
+                var data = await res.json();
+
+                if (data.loading && data.results.length === 0) {
+                    document.getElementById('content').innerHTML =
+                        '<div class="loading">系統啟動中，正在載入數據...<br><small style="color:#444">首次載入需要約 30-60 秒</small></div>';
+                    setTimeout(loadData, 5000);
+                    return;
+                }
+
+                if (data.results.length === 0) {
+                    document.getElementById('content').innerHTML =
+                        '<div class="loading">暫無數據，請稍後重試</div>';
+                    return;
+                }
+
                 render(data);
+
             } catch(e) {
-                document.getElementById('content').innerHTML = '<div class="loading">載入失敗，請重試</div>';
+                document.getElementById('content').innerHTML =
+                    '<div class="loading">載入失敗，請重試</div>';
             }
         }
 
+        // 手動更新
+        async function triggerRefresh() {
+            await fetch('/api/refresh');
+            document.getElementById('content').innerHTML =
+                '<div class="loading">更新中，請稍候...</div>';
+            setTimeout(loadData, 5000);
+        }
+
+        // 渲染 Dashboard
         function render(data) {
-            const R = data.results;
-            let h = '';
+            var R = data.results;
+            var h = '';
 
             // 熱力矩陣
             h += '<div class="section-title">Watchlist 熱力矩陣</div><div class="heat-grid">';
             R.forEach(function(r) {
-                const c = heatColor(r.change_pct);
-                const sign = r.change_pct >= 0 ? '+' : '';
+                var c    = heatColor(r.change_pct);
+                var sign = r.change_pct >= 0 ? '+' : '';
                 h += '<div class="heat-cell" style="background:' + c[0] + '">' +
                      '<div class="cell-symbol" style="color:' + c[1] + '">' + r.symbol.replace('.HK','') + '</div>' +
                      '<div class="cell-change" style="color:' + c[1] + '">' + sign + r.change_pct.toFixed(2) + '%</div>' +
@@ -142,13 +169,13 @@
             });
             h += '</div>';
 
-            // 評分表
+            // 評分排行
             h += '<div class="section-title">評分排行</div>';
             h += '<table class="score-table"><thead><tr>' +
                  '<th>股票</th><th>總分</th><th>評級</th><th>技術面</th><th>風險面</th><th>新聞面</th><th>建議</th>' +
                  '</tr></thead><tbody>';
             R.forEach(function(r) {
-                const ns = (r.news && r.news.score) ? r.news.score : 15;
+                var ns = (r.news && r.news.score) ? r.news.score : 15;
                 h += '<tr>' +
                      '<td><strong>' + r.symbol + '</strong><br><span style="color:#666;font-size:10px">' + r.price.toFixed(3) + '</span></td>' +
                      '<td><strong style="font-size:16px">' + r.total + '</strong><span style="color:#444;font-size:10px">/100</span></td>' +
@@ -162,15 +189,15 @@
             h += '</tbody></table>';
 
             // 新聞
-            const wn = R.filter(function(r) { return r.news && r.news.headlines && r.news.headlines.length > 0; });
+            var wn = R.filter(function(r) { return r.news && r.news.headlines && r.news.headlines.length > 0; });
             if (wn.length > 0) {
                 h += '<div class="section-title">最新新聞</div>';
                 wn.forEach(function(r) {
-                    const nl = (r.news && r.news.label) ? r.news.label : '中性';
+                    var nl = (r.news && r.news.label) ? r.news.label : '中性';
                     h += '<div class="news-card">';
                     h += '<div class="news-label">' + r.symbol +
                          ' <span class="sent ' + sentClass(nl) + '">' + nl + '</span>' +
-                         '<span style="color:#444;font-size:10px">' + r.news.score + '/30分</span></div>';
+                         '<span style="color:#444;font-size:10px"> ' + r.news.score + '/30分</span></div>';
                     r.news.headlines.forEach(function(hl) {
                         h += '<div class="news-item">• ' + hl + '</div>';
                     });
@@ -185,6 +212,7 @@
             document.getElementById('content').innerHTML = h;
         }
 
+        // 啟動
         loadData();
         setInterval(loadData, 300000);
     </script>

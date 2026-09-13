@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>港股交易系統</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0D0D0D; color: #F7F3EA; min-height: 100vh; }
+        .header { background: #111; padding: 12px 20px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 14px; letter-spacing: 0.1em; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #1E8E5A; display: inline-block; margin-right: 8px; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
+        .section-title { font-size: 11px; letter-spacing: 0.1em; color: #666; text-transform: uppercase; margin: 20px 0 10px; }
+        .heat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 4px; margin-bottom: 20px; }
+        .heat-cell { padding: 10px 8px; border-radius: 4px; text-align: center; cursor: default; transition: transform 0.15s; }
+        .heat-cell:hover { transform: scale(1.05); }
+        .cell-symbol { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; }
+        .cell-change { font-size: 13px; font-weight: 700; margin-top: 2px; }
+        .cell-price { font-size: 10px; opacity: 0.7; margin-top: 2px; }
+        .score-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .score-table th { text-align: left; padding: 8px 12px; border-bottom: 1px solid #333; color: #666; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+        .score-table td { padding: 10px 12px; border-bottom: 1px solid #1a1a1a; vertical-align: middle; }
+        .score-table tr:hover td { background: #151515; }
+        .bar-bg { background: #222; border-radius: 2px; height: 6px; width: 80px; display: inline-block; vertical-align: middle; margin-left: 4px; }
+        .bar-fill { height: 100%; border-radius: 2px; }
+        .grade { font-size: 10px; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
+        .g-green { background: rgba(30,142,90,0.2); color: #1E8E5A; }
+        .g-yellow { background: rgba(232,163,61,0.2); color: #E8A33D; }
+        .g-orange { background: rgba(232,163,61,0.15); color: #E8A33D; }
+        .g-red { background: rgba(193,39,45,0.2); color: #C1272D; }
+        .news-card { background: #111; border: 1px solid #222; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px; }
+        .news-label { font-size: 11px; font-weight: 700; color: #E8A33D; margin-bottom: 8px; }
+        .news-item { font-size: 12px; color: #aaa; padding: 4px 0; border-bottom: 1px solid #1a1a1a; line-height: 1.4; }
+        .news-item:last-child { border-bottom: none; }
+        .sent { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 2px; margin: 0 4px; }
+        .s-pos { background: rgba(30,142,90,0.2); color: #1E8E5A; }
+        .s-neg { background: rgba(193,39,45,0.2); color: #C1272D; }
+        .s-neu { background: rgba(255,255,255,0.08); color: #666; }
+        .ai-box { background: rgba(59,91,165,0.1); border: 1px solid rgba(59,91,165,0.3); border-radius: 4px; padding: 8px 12px; margin-top: 8px; font-size: 12px; color: #9ab; line-height: 1.5; }
+        .loading { text-align: center; padding: 60px; color: #444; }
+        .refresh-btn { background: #1a1a1a; border: 1px solid #333; color: #aaa; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+        .refresh-btn:hover { background: #222; color: #F7F3EA; }
+        .notice { font-size: 11px; color: #444; text-align: center; padding: 16px; margin-top: 8px; }
+        @media (max-width: 600px) {
+            .heat-grid { grid-template-columns: repeat(3, 1fr); }
+            .score-table { font-size: 11px; }
+            .bar-bg { width: 50px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1><span class="status-dot"></span>港股日內交易系統</h1>
+        <div>
+            <span id="clock" style="font-size:12px;color:#666;margin-right:12px"></span>
+            <button class="refresh-btn" onclick="loadData()">↻ 更新</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="content"><div class="loading">載入數據中...</div></div>
+    </div>
+
+    <script>
+        // 時鐘
+        function updateClock() {
+            document.getElementById('clock').textContent =
+                new Date().toLocaleTimeString('zh-HK', { timeZone: 'Asia/Hong_Kong', hour12: false });
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        function heatColor(pct) {
+            const a = Math.abs(pct);
+            if (pct > 0) {
+                if (a < 0.5) return ['rgba(30,142,90,0.12)', '#1E8E5A'];
+                if (a < 1.5) return ['rgba(30,142,90,0.28)', '#1E8E5A'];
+                if (a < 3.0) return ['rgba(30,142,90,0.55)', '#0F6B40'];
+                return ['rgba(30,142,90,0.85)', '#F7F3EA'];
+            } else if (pct < 0) {
+                if (a < 0.5) return ['rgba(193,39,45,0.12)', '#C1272D'];
+                if (a < 1.5) return ['rgba(193,39,45,0.28)', '#C1272D'];
+                if (a < 3.0) return ['rgba(193,39,45,0.55)', '#8B0E13'];
+                return ['rgba(193,39,45,0.85)', '#F7F3EA'];
+            }
+            return ['rgba(107,107,107,0.15)', '#666'];
+        }
+
+        function gradeClass(t) {
+            if (t >= 80) return 'g-green';
+            if (t >= 70) return 'g-yellow';
+            if (t >= 60) return 'g-orange';
+            return 'g-red';
+        }
+
+        function barColor(s, m) {
+            const p = s / m;
+            if (p >= 0.8) return '#1E8E5A';
+            if (p >= 0.6) return '#E8A33D';
+            return '#C1272D';
+        }
+
+        function sentClass(s) {
+            if (s === '正面' || s === '略正面') return 's-pos';
+            if (s === '負面' || s === '略負面') return 's-neg';
+            return 's-neu';
+        }
+
+        function bar(score, max) {
+            const pct = Math.round(score / max * 100);
+            const color = barColor(score, max);
+            return score + '/' + max +
+                '<div class="bar-bg"><div class="bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
+        }
+
+        async function loadData() {
+            try {
+                const res = await fetch('/api/analysis');
+                const data = await res.json();
+                render(data);
+            } catch(e) {
+                document.getElementById('content').innerHTML = '<div class="loading">載入失敗，請重試</div>';
+            }
+        }
+
+        function render(data) {
+            const R = data.results;
+            let h = '';
+
+            // 熱力矩陣
+            h += '<div class="section-title">Watchlist 熱力矩陣</div><div class="heat-grid">';
+            R.forEach(function(r) {
+                const c = heatColor(r.change_pct);
+                const sign = r.change_pct >= 0 ? '+' : '';
+                h += '<div class="heat-cell" style="background:' + c[0] + '">' +
+                     '<div class="cell-symbol" style="color:' + c[1] + '">' + r.symbol.replace('.HK','') + '</div>' +
+                     '<div class="cell-change" style="color:' + c[1] + '">' + sign + r.change_pct.toFixed(2) + '%</div>' +
+                     '<div class="cell-price" style="color:' + c[1] + '">' + r.price.toFixed(2) + '</div>' +
+                     '</div>';
+            });
+            h += '</div>';
+
+            // 評分表
+            h += '<div class="section-title">評分排行</div>';
+            h += '<table class="score-table"><thead><tr>' +
+                 '<th>股票</th><th>總分</th><th>評級</th><th>技術面</th><th>風險面</th><th>新聞面</th><th>建議</th>' +
+                 '</tr></thead><tbody>';
+            R.forEach(function(r) {
+                const ns = (r.news && r.news.score) ? r.news.score : 15;
+                h += '<tr>' +
+                     '<td><strong>' + r.symbol + '</strong><br><span style="color:#666;font-size:10px">' + r.price.toFixed(3) + '</span></td>' +
+                     '<td><strong style="font-size:16px">' + r.total + '</strong><span style="color:#444;font-size:10px">/100</span></td>' +
+                     '<td><span class="grade ' + gradeClass(r.total) + '">' + r.grade + '</span></td>' +
+                     '<td>' + bar(r.technical.score, 50) + '</td>' +
+                     '<td>' + bar(r.risk.score, 20) + '</td>' +
+                     '<td>' + bar(ns, 30) + '</td>' +
+                     '<td style="color:#888;font-size:11px">' + r.action + '</td>' +
+                     '</tr>';
+            });
+            h += '</tbody></table>';
+
+            // 新聞
+            const wn = R.filter(function(r) { return r.news && r.news.headlines && r.news.headlines.length > 0; });
+            if (wn.length > 0) {
+                h += '<div class="section-title">最新新聞</div>';
+                wn.forEach(function(r) {
+                    const nl = (r.news && r.news.label) ? r.news.label : '中性';
+                    h += '<div class="news-card">';
+                    h += '<div class="news-label">' + r.symbol +
+                         ' <span class="sent ' + sentClass(nl) + '">' + nl + '</span>' +
+                         '<span style="color:#444;font-size:10px">' + r.news.score + '/30分</span></div>';
+                    r.news.headlines.forEach(function(hl) {
+                        h += '<div class="news-item">• ' + hl + '</div>';
+                    });
+                    if (r.news.summary) {
+                        h += '<div class="ai-box">🤖 ' + r.news.summary + '</div>';
+                    }
+                    h += '</div>';
+                });
+            }
+
+            h += '<div class="notice">數據更新：' + data.updated_at + ' HKT ｜ yfinance 15分鐘延遲 ｜ 僅供參考</div>';
+            document.getElementById('content').innerHTML = h;
+        }
+
+        loadData();
+        setInterval(loadData, 300000);
+    </script>
+</body>
+</html>

@@ -2,6 +2,9 @@
 # main.py — 主程式（完整版）
 # ─────────────────────────────────────────
 
+import os
+os.environ["TZ"] = "Asia/Hong_Kong"
+
 import sys
 import subprocess
 import schedule

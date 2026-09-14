@@ -100,6 +100,48 @@ def api_refresh():
     return jsonify({"status": "already_updating"})
 
 
+from journal import add_trade, close_trade, get_all_trades, get_stats
+
+@app.route("/api/journal", methods=["GET"])
+def api_journal():
+    """取得所有交易記錄同統計"""
+    return jsonify({
+        "trades": get_all_trades(),
+        "stats":  get_stats(),
+    })
+
+@app.route("/api/journal/add", methods=["POST"])
+def api_journal_add():
+    """新增交易"""
+    from flask import request
+    data = request.get_json()
+    try:
+        trade_id = add_trade(
+            symbol      = data["symbol"],
+            score       = data.get("score", 0),
+            direction   = data.get("direction", "買入"),
+            entry_price = float(data["entry_price"]),
+            qty         = int(data.get("qty", 1000)),
+            note        = data.get("note", ""),
+        )
+        return jsonify({"success": True, "id": trade_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+@app.route("/api/journal/close", methods=["POST"])
+def api_journal_close():
+    """平倉交易"""
+    from flask import request
+    data = request.get_json()
+    try:
+        result = close_trade(
+            trade_id   = int(data["id"]),
+            exit_price = float(data["exit_price"]),
+        )
+        return jsonify({"success": True, "result": result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

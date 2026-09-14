@@ -43,10 +43,33 @@
         .refresh-btn { background: #1a1a1a; border: 1px solid #333; color: #aaa; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 11px; }
         .refresh-btn:hover { background: #222; color: #F7F3EA; }
         .notice { font-size: 11px; color: #444; text-align: center; padding: 16px; margin-top: 8px; }
+        /* Journal */
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-bottom: 16px; }
+        .stat-card { background: #111; border: 1px solid #222; border-radius: 6px; padding: 12px; text-align: center; }
+        .stat-card .stat-val { font-size: 22px; font-weight: 700; }
+        .stat-card .stat-label { font-size: 10px; color: #666; margin-top: 4px; letter-spacing: 0.05em; }
+        .add-trade-form { background: #111; border: 1px solid #222; border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+        .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 8px; }
+        .form-group { display: flex; flex-direction: column; gap: 4px; }
+        .form-group label { font-size: 10px; color: #666; letter-spacing: 0.05em; text-transform: uppercase; }
+        .form-input { background: #1a1a1a; border: 1px solid #333; color: #F7F3EA; padding: 6px 10px; border-radius: 4px; font-size: 12px; width: 120px; }
+        .form-input:focus { outline: none; border-color: #555; }
+        .form-select { background: #1a1a1a; border: 1px solid #333; color: #F7F3EA; padding: 6px 10px; border-radius: 4px; font-size: 12px; }
+        .btn-add { background: #1E8E5A; border: none; color: #fff; padding: 7px 16px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; }
+        .btn-add:hover { background: #17a86a; }
+        .trade-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .trade-table th { text-align: left; padding: 6px 10px; border-bottom: 1px solid #333; color: #666; font-size: 10px; text-transform: uppercase; }
+        .trade-table td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; }
+        .trade-table tr:hover td { background: #151515; }
+        .btn-close { background: #1a1a1a; border: 1px solid #333; color: #aaa; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 10px; }
+        .btn-close:hover { background: #C1272D; color: #fff; border-color: #C1272D; }
+        .pnl-pos { color: #1E8E5A; font-weight: 600; }
+        .pnl-neg { color: #C1272D; font-weight: 600; }
         @media (max-width: 600px) {
             .heat-grid { grid-template-columns: repeat(3, 1fr); }
             .score-table { font-size: 11px; }
             .bar-bg { width: 50px; }
+            .form-row { flex-direction: column; }
         }
     </style>
 </head>
@@ -61,9 +84,12 @@
 
     <div class="container">
         <div id="content"><div class="loading">載入數據中...</div></div>
+        <div id="journal-section"></div>
     </div>
 
     <script>
+        var _scores = {};
+
         // 時鐘
         function updateClock() {
             document.getElementById('clock').textContent =
@@ -116,7 +142,13 @@
                 '<div class="bar-bg"><div class="bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
         }
 
-        // 載入數據
+        function stat(val, label, color) {
+            color = color || '#F7F3EA';
+            return '<div class="stat-card"><div class="stat-val" style="color:' + color + '">' + val + '</div>' +
+                   '<div class="stat-label">' + label + '</div></div>';
+        }
+
+        // 載入主數據
         async function loadData() {
             try {
                 var res  = await fetch('/api/analysis');
@@ -151,10 +183,13 @@
             setTimeout(loadData, 5000);
         }
 
-        // 渲染 Dashboard
+        // 渲染主面板
         function render(data) {
             var R = data.results;
             var h = '';
+
+            // 儲存評分
+            R.forEach(function(r) { _scores[r.symbol] = r.total; });
 
             // 熱力矩陣
             h += '<div class="section-title">Watchlist 熱力矩陣</div><div class="heat-grid">';
@@ -210,10 +245,166 @@
 
             h += '<div class="notice">數據更新：' + data.updated_at + ' HKT ｜ yfinance 15分鐘延遲 ｜ 僅供參考</div>';
             document.getElementById('content').innerHTML = h;
+
+            // 更新日誌面板嘅股票選項
+            updateSymbolOptions(R);
+        }
+
+        function updateSymbolOptions(results) {
+            var sel = document.getElementById('j-symbol');
+            if (!sel) return;
+            sel.innerHTML = '';
+            results.forEach(function(r) {
+                var opt = document.createElement('option');
+                opt.value = r.symbol;
+                opt.textContent = r.symbol + ' (' + r.total + '分)';
+                sel.appendChild(opt);
+            });
+        }
+
+        // ── 交易日誌 ─────────────────────────────
+
+        function renderJournal(data) {
+            var stats  = data.stats;
+            var trades = data.trades;
+            var open   = trades.filter(function(t) { return t.status === 'open'; });
+            var closed = trades.filter(function(t) { return t.status === 'closed'; });
+
+            var h = '<div class="section-title">模擬交易日誌</div>';
+
+            // 統計
+            h += '<div class="stats-grid">';
+            h += stat(stats.total, '總交易次數');
+            h += stat(stats.win_rate + '%', '勝率', stats.win_rate >= 50 ? '#1E8E5A' : '#C1272D');
+            h += stat(stats.wins, '贏', '#1E8E5A');
+            h += stat(stats.losses, '輸', '#C1272D');
+            h += stat((stats.total_pnl >= 0 ? '+' : '') + stats.total_pnl, '總盈虧(HKD)', stats.total_pnl >= 0 ? '#1E8E5A' : '#C1272D');
+            h += stat(stats.avg_win + '%', '平均盈利', '#1E8E5A');
+            h += stat(stats.avg_loss + '%', '平均虧損', '#C1272D');
+            h += '</div>';
+
+            // 新增表單
+            h += '<div class="add-trade-form">';
+            h += '<div style="font-size:11px;color:#666;margin-bottom:10px;letter-spacing:0.05em">新增模擬交易</div>';
+            h += '<div class="form-row">';
+            h += '<div class="form-group"><label>股票</label><select class="form-select" id="j-symbol"></select></div>';
+            h += '<div class="form-group"><label>方向</label><select class="form-select" id="j-dir"><option value="買入">買入</option><option value="賣出">賣出</option></select></div>';
+            h += '<div class="form-group"><label>入場價</label><input class="form-input" id="j-entry" type="number" step="0.001" placeholder="0.000"></div>';
+            h += '<div class="form-group"><label>數量</label><input class="form-input" id="j-qty" type="number" value="1000"></div>';
+            h += '<div class="form-group"><label>備註</label><input class="form-input" id="j-note" type="text" placeholder="入場原因..." style="width:180px"></div>';
+            h += '<div class="form-group"><label>&nbsp;</label><button class="btn-add" onclick="addTrade()">+ 記錄</button></div>';
+            h += '</div></div>';
+
+            // 未平倉
+            if (open.length > 0) {
+                h += '<div style="font-size:11px;color:#E8A33D;margin:12px 0 6px;letter-spacing:0.05em">未平倉 (' + open.length + ')</div>';
+                h += '<table class="trade-table"><thead><tr><th>時間</th><th>股票</th><th>方向</th><th>評分</th><th>入場價</th><th>數量</th><th>備註</th><th>平倉</th></tr></thead><tbody>';
+                open.forEach(function(t) {
+                    h += '<tr>' +
+                         '<td style="color:#666">' + t.created_at + '</td>' +
+                         '<td><strong>' + t.symbol + '</strong></td>' +
+                         '<td>' + t.direction + '</td>' +
+                         '<td>' + (t.score || '-') + '</td>' +
+                         '<td>' + t.entry_price.toFixed(3) + '</td>' +
+                         '<td>' + t.qty + '</td>' +
+                         '<td style="color:#666">' + (t.note || '-') + '</td>' +
+                         '<td><input id="ep-' + t.id + '" class="form-input" type="number" step="0.001" placeholder="出場價" style="width:90px">' +
+                         ' <button class="btn-close" onclick="closeTrade(' + t.id + ')">平倉</button></td>' +
+                         '</tr>';
+                });
+                h += '</tbody></table>';
+            }
+
+            // 歷史
+            if (closed.length > 0) {
+                h += '<div style="font-size:11px;color:#666;margin:16px 0 6px;letter-spacing:0.05em">歷史記錄 (' + closed.length + ')</div>';
+                h += '<table class="trade-table"><thead><tr><th>時間</th><th>股票</th><th>方向</th><th>評分</th><th>入場</th><th>出場</th><th>盈虧%</th><th>結果</th><th>備註</th></tr></thead><tbody>';
+                closed.forEach(function(t) {
+                    var pnlClass = t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+                    var pnlSign  = t.pnl_pct >= 0 ? '+' : '';
+                    h += '<tr>' +
+                         '<td style="color:#666">' + t.created_at + '</td>' +
+                         '<td><strong>' + t.symbol + '</strong></td>' +
+                         '<td>' + t.direction + '</td>' +
+                         '<td>' + (t.score || '-') + '</td>' +
+                         '<td>' + t.entry_price.toFixed(3) + '</td>' +
+                         '<td>' + (t.exit_price ? t.exit_price.toFixed(3) : '-') + '</td>' +
+                         '<td class="' + pnlClass + '">' + pnlSign + t.pnl_pct + '%</td>' +
+                         '<td class="' + pnlClass + '">' + (t.result || '-') + '</td>' +
+                         '<td style="color:#666">' + (t.note || '-') + '</td>' +
+                         '</tr>';
+                });
+                h += '</tbody></table>';
+            }
+
+            if (trades.length === 0) {
+                h += '<div style="text-align:center;padding:30px;color:#444;font-size:12px">未有交易記錄<br>填寫上方表單開始記錄</div>';
+            }
+
+            document.getElementById('journal-section').innerHTML = h;
+
+            // 更新股票選項
+            if (Object.keys(_scores).length > 0) {
+                var sel = document.getElementById('j-symbol');
+                if (sel && sel.options.length === 0) {
+                    Object.keys(_scores).forEach(function(sym) {
+                        var opt = document.createElement('option');
+                        opt.value = sym;
+                        opt.textContent = sym + ' (' + _scores[sym] + '分)';
+                        sel.appendChild(opt);
+                    });
+                }
+            }
+        }
+
+        async function addTrade() {
+            var symbol = document.getElementById('j-symbol').value;
+            var dir    = document.getElementById('j-dir').value;
+            var entry  = parseFloat(document.getElementById('j-entry').value);
+            var qty    = parseInt(document.getElementById('j-qty').value) || 1000;
+            var note   = document.getElementById('j-note').value;
+
+            if (!entry || entry <= 0) { alert('請輸入入場價'); return; }
+
+            var res = await fetch('/api/journal/add', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ symbol: symbol, score: _scores[symbol] || 0, direction: dir, entry_price: entry, qty: qty, note: note })
+            });
+            var data = await res.json();
+            if (data.success) {
+                document.getElementById('j-entry').value = '';
+                document.getElementById('j-note').value  = '';
+                loadJournal();
+            }
+        }
+
+        async function closeTrade(id) {
+            var exitInput = document.getElementById('ep-' + id);
+            var exitPrice = parseFloat(exitInput.value);
+            if (!exitPrice || exitPrice <= 0) { alert('請輸入出場價'); return; }
+            var res = await fetch('/api/journal/close', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: id, exit_price: exitPrice })
+            });
+            var data = await res.json();
+            if (data.success) { loadJournal(); }
+        }
+
+        async function loadJournal() {
+            try {
+                var res  = await fetch('/api/journal');
+                var data = await res.json();
+                renderJournal(data);
+            } catch(e) {
+                console.log('Journal load failed:', e);
+            }
         }
 
         // 啟動
         loadData();
+        loadJournal();
         setInterval(loadData, 300000);
     </script>
 </body>

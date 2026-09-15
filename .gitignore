@@ -221,3 +221,11 @@ __marimo__/
 *.pyc
 *.pyo
 .DS_Store
+.env
+*.db
+__pycache__/
+
+Old/
+.env
+*.db
+__pycache__/

@@ -1,128 +1,210 @@
-# ─────────────────────────────────────────
-# main.py — 主程式（完整版）
-# ─────────────────────────────────────────
-
+"""
+主程式 — 排程 + 網頁儀表板
+一個 process 搞掂：Flask 服務（Railway 需要）＋ 背景排程執行緒。
+香港時間排程：開市前掃描、日內掃描、持倉監控、收市提醒。
+"""
+import logging
 import os
-os.environ["TZ"] = "Asia/Hong_Kong"
-
-import sys
-import subprocess
-import schedule
+import threading
 import time
-import os
-import pytz
 from datetime import datetime
-import config
-from data_fetcher import get_all_stocks
-from scoring import score_all_stocks, print_score_report
-from telegram_bot import send, format_morning_report, format_closing_reminder
 
-# 香港時區
-HK_TZ = pytz.timezone("Asia/Hong_Kong")
+import schedule
+from flask import Flask, jsonify, render_template, request
+from flask_cors import CORS
 
-def hk_now():
-    """返回香港時間"""
-    return datetime.now(HK_TZ)
+import scanner
+from config import (CLOSE_REMINDER_TIME, DASH_PASS, DASH_USER, HK_TZ,
+                    MONITOR_INTERVAL_MIN, PORT, SCAN_TIMES, WATCHLIST)
+from positions import init_db, list_closed, list_open, realised_stats, recent_signals
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+log = logging.getLogger("tylove.main")
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
+app = Flask(__name__, template_folder="templates")
+CORS(app)
+
+_STATE = {"last_scan": None, "last_result": None, "last_positions": [], "running": False}
+_LOCK = threading.Lock()
 
 
-# ── 自動更新 yfinance ─────────────────────
+def now_hk() -> datetime:
+    return datetime.now(ZoneInfo(HK_TZ)) if ZoneInfo else datetime.now()
 
-def update_yfinance():
+
+# ------------------------------------------------------------------ 排程工作
+def job_scan(label: str = "定時掃描"):
+    if _STATE["running"]:
+        log.info("上一次掃描未完，跳過今次")
+        return
+    _STATE["running"] = True
     try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install",
-             "--upgrade", "yfinance", "--quiet"],
-            capture_output=True, text=True
-        )
-        print("✅ yfinance 已是最新版本")
-    except Exception as e:
-        print(f"⚠️ yfinance 更新失敗: {e}")
+        log.info("開始掃描：%s", label)
+        result = scanner.scan(scan_type=label)
+        with _LOCK:
+            _STATE["last_scan"] = now_hk().strftime("%Y-%m-%d %H:%M:%S")
+            _STATE["last_result"] = result
+        log.info("掃描完成，%d 個訊號", len(result["signals"]))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("掃描失敗")
+        try:
+            import notifier
+            notifier.push(notifier.fmt_error("定時掃描", str(exc)))
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        _STATE["running"] = False
 
 
-# ── 核心分析流程 ──────────────────────────
-
-def run_analysis(send_telegram=True):
-    """執行完整分析，可選擇是否推送 Telegram"""
-    now = hk_now()
-    print(f"\n{'═'*55}")
-    print(f"  🕐 執行分析：{now.strftime('%Y-%m-%d %H:%M:%S')} HKT")
-    print(f"{'═'*55}")
-
-    stocks = get_all_stocks()
-    if not stocks:
-        print("❌ 無法獲取數據，跳過本次分析")
-        return None
-
-    results = score_all_stocks(stocks)
-    print_score_report(results)
-
-    if send_telegram:
-        report = format_morning_report(results)
-        if send(report):
-            print("📲 Telegram 報告已發送")
-        else:
-            print("⚠️ Telegram 發送失敗")
-
-    return results
+def job_monitor():
+    try:
+        recs = scanner.monitor_positions(push=True)
+        with _LOCK:
+            _STATE["last_positions"] = recs
+    except Exception as exc:  # noqa: BLE001
+        log.exception("持倉監控失敗")
 
 
-def run_closing_reminder():
-    """下午 2:50 平倉提醒"""
-    msg = format_closing_reminder()
-    send(msg)
-    print("📲 平倉提醒已發送")
+def job_open_scan():
+    job_scan("開市前掃描")
 
 
-# ── 排程設定 ──────────────────────────────
+def job_close_reminder():
+    try:
+        scanner.closing_reminder()
+    except Exception:  # noqa: BLE001
+        log.exception("收市提醒失敗")
+
 
 def setup_schedule():
-    schedule.every().day.at("09:25").do(run_analysis)
-    schedule.every().day.at("10:00").do(run_analysis)
-    schedule.every().day.at("11:30").do(run_analysis)
-    schedule.every().day.at("14:00").do(run_analysis)
-    schedule.every().day.at("14:50").do(run_closing_reminder)
-
-    print("⏰ 排程已設定（香港時間）：")
-    print("   09:25 開市前分析 + Telegram 報告")
-    print("   10:00 開市後確認 + Telegram 報告")
-    print("   11:30 午市前分析 + Telegram 報告")
-    print("   14:00 下午分析   + Telegram 報告")
-    print("   14:50 平倉提醒")
+    for t in SCAN_TIMES:
+        t = t.strip()
+        if t:
+            schedule.every().day.at(t).do(job_open_scan)
+    schedule.every(MONITOR_INTERVAL_MIN).minutes.do(job_monitor)
+    schedule.every().day.at(CLOSE_REMINDER_TIME).do(job_close_reminder)
+    log.info("排程設定完成：掃描 %s／每 %d 分鐘監控／%s 收市提醒",
+             SCAN_TIMES, MONITOR_INTERVAL_MIN, CLOSE_REMINDER_TIME)
 
 
-# ── 主程式 ────────────────────────────────
-
-def main():
-    print("=" * 55)
-    print("  🚀 港股日內交易系統 啟動")
-    print(f"  版本：v0.2.0")
-    print(f"  時間：{hk_now().strftime('%Y-%m-%d %H:%M:%S')} HKT")
-    print("=" * 55)
-
-    # 1. 更新 yfinance
-    print("\n🔄 檢查套件更新...")
-    update_yfinance()
-
-    # 2. 發送啟動通知
-    send(f"🚀 港股交易系統已啟動\n"
-         f"{hk_now().strftime('%Y-%m-%d %H:%M')} HKT")
-
-    # 3. 立即執行一次分析
-    print("\n📊 執行初始分析...")
-    run_analysis(send_telegram=True)
-
-    # 4. 設定排程
-    print()
+def scheduler_loop():
     setup_schedule()
-
-    # 5. 進入排程循環
-    print("\n✅ 系統運行中，等待下次排程...")
-    print("   （按 Ctrl+C 停止）\n")
-
     while True:
-        schedule.run_pending()
-        time.sleep(30)
+        try:
+            schedule.run_pending()
+        except Exception:  # noqa: BLE001
+            log.exception("排程執行出錯")
+        time.sleep(20)
+
+
+# ------------------------------------------------------------------ 認證
+def _authed() -> bool:
+    if not DASH_USER:
+        return True
+    auth = request.authorization
+    return bool(auth and auth.username == DASH_USER and auth.password == DASH_PASS)
+
+
+@app.before_request
+def _guard():
+    if request.path.startswith("/api/health"):
+        return None
+    if not _authed():
+        return ("需要登入", 401, {"WWW-Authenticate": 'Basic realm="TyLove"'})
+
+
+# ------------------------------------------------------------------ 路由
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/health")
+def health():
+    return jsonify({"ok": True, "time": now_hk().strftime("%Y-%m-%d %H:%M:%S"),
+                    "running": _STATE["running"]})
+
+
+@app.route("/api/state")
+def state():
+    with _LOCK:
+        result = _STATE["last_result"]
+        return jsonify({
+            "last_scan": _STATE["last_scan"],
+            "running": _STATE["running"],
+            "signals": result["signals"] if result else [],
+            "all": result["all"] if result else [],
+            "vetoed": result["vetoed"] if result else [],
+            "allow_new": result["allow_new"] if result else {},
+            "positions": _STATE["last_positions"],
+            "open_positions": list_open(),
+            "stats": realised_stats(),
+            "watchlist": WATCHLIST,
+        })
+
+
+@app.route("/api/scan", methods=["POST"])
+def manual_scan():
+    threading.Thread(target=job_scan, args=("手動掃描",), daemon=True).start()
+    return jsonify({"ok": True, "message": "掃描已開始，約一至兩分鐘後更新"})
+
+
+@app.route("/api/monitor", methods=["POST"])
+def manual_monitor():
+    recs = scanner.monitor_positions(push=False, force=True)
+    with _LOCK:
+        _STATE["last_positions"] = recs
+    return jsonify({"ok": True, "positions": recs})
+
+
+@app.route("/api/positions", methods=["GET", "POST"])
+def positions_api():
+    from positions import close_position, open_position
+    if request.method == "POST":
+        d = request.get_json(force=True) or {}
+        try:
+            pid = open_position(
+                d["symbol"].upper(), d.get("name", d["symbol"].upper()),
+                float(d["entry_price"]), float(d["qty"]), float(d["stop_loss"]),
+                d.get("target1"), d.get("target2"), d.get("atr"), d.get("note", ""),
+            )
+            return jsonify({"ok": True, "id": pid})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+    return jsonify({"open": list_open(), "closed": list_closed(30), "stats": realised_stats()})
+
+
+@app.route("/api/positions/<int:pid>/close", methods=["POST"])
+def close_api(pid):
+    from positions import close_position
+    d = request.get_json(force=True) or {}
+    close_position(pid, float(d["exit_price"]), d.get("reason", "手動平倉"))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/signals")
+def signals_api():
+    return jsonify({"signals": recent_signals(60)})
+
+
+def start_background():
+    init_db()
+    t = threading.Thread(target=scheduler_loop, daemon=True)
+    t.start()
+    # 開機先做一次掃描，確認設定正確
+    threading.Thread(target=lambda: (time.sleep(5), job_scan("啟動掃描")), daemon=True).start()
 
 
 if __name__ == "__main__":
-    main()
+    start_background()
+    log.info("TyLove 啟動，port %s", PORT)
+    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)

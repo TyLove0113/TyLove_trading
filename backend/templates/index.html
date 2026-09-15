@@ -1,411 +1,186 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-HK">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>港股交易系統</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0D0D0D; color: #F7F3EA; min-height: 100vh; }
-        .header { background: #111; padding: 12px 20px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
-        .header h1 { font-size: 14px; letter-spacing: 0.1em; }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #1E8E5A; display: inline-block; margin-right: 8px; animation: pulse 2s infinite; }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-        .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
-        .section-title { font-size: 11px; letter-spacing: 0.1em; color: #666; text-transform: uppercase; margin: 20px 0 10px; }
-        .heat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 4px; margin-bottom: 20px; }
-        .heat-cell { padding: 10px 8px; border-radius: 4px; text-align: center; cursor: default; transition: transform 0.15s; }
-        .heat-cell:hover { transform: scale(1.05); }
-        .cell-symbol { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; }
-        .cell-change { font-size: 13px; font-weight: 700; margin-top: 2px; }
-        .cell-price { font-size: 10px; opacity: 0.7; margin-top: 2px; }
-        .score-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .score-table th { text-align: left; padding: 8px 12px; border-bottom: 1px solid #333; color: #666; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
-        .score-table td { padding: 10px 12px; border-bottom: 1px solid #1a1a1a; vertical-align: middle; }
-        .score-table tr:hover td { background: #151515; }
-        .bar-bg { background: #222; border-radius: 2px; height: 6px; width: 80px; display: inline-block; vertical-align: middle; margin-left: 4px; }
-        .bar-fill { height: 100%; border-radius: 2px; }
-        .grade { font-size: 10px; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
-        .g-green { background: rgba(30,142,90,0.2); color: #1E8E5A; }
-        .g-yellow { background: rgba(232,163,61,0.2); color: #E8A33D; }
-        .g-orange { background: rgba(232,163,61,0.15); color: #E8A33D; }
-        .g-red { background: rgba(193,39,45,0.2); color: #C1272D; }
-        .news-card { background: #111; border: 1px solid #222; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px; }
-        .news-label { font-size: 11px; font-weight: 700; color: #E8A33D; margin-bottom: 8px; }
-        .news-item { font-size: 12px; color: #aaa; padding: 4px 0; border-bottom: 1px solid #1a1a1a; line-height: 1.4; }
-        .news-item:last-child { border-bottom: none; }
-        .sent { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 2px; margin: 0 4px; }
-        .s-pos { background: rgba(30,142,90,0.2); color: #1E8E5A; }
-        .s-neg { background: rgba(193,39,45,0.2); color: #C1272D; }
-        .s-neu { background: rgba(255,255,255,0.08); color: #666; }
-        .ai-box { background: rgba(59,91,165,0.1); border: 1px solid rgba(59,91,165,0.3); border-radius: 4px; padding: 8px 12px; margin-top: 8px; font-size: 12px; color: #9ab; line-height: 1.5; }
-        .loading { text-align: center; padding: 60px; color: #444; }
-        .refresh-btn { background: #1a1a1a; border: 1px solid #333; color: #aaa; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 11px; }
-        .refresh-btn:hover { background: #222; color: #F7F3EA; }
-        .notice { font-size: 11px; color: #444; text-align: center; padding: 16px; margin-top: 8px; }
-        /* Journal */
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-bottom: 16px; }
-        .stat-card { background: #111; border: 1px solid #222; border-radius: 6px; padding: 12px; text-align: center; }
-        .stat-card .stat-val { font-size: 22px; font-weight: 700; }
-        .stat-card .stat-label { font-size: 10px; color: #666; margin-top: 4px; letter-spacing: 0.05em; }
-        .add-trade-form { background: #111; border: 1px solid #222; border-radius: 6px; padding: 16px; margin-bottom: 16px; }
-        .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 8px; }
-        .form-group { display: flex; flex-direction: column; gap: 4px; }
-        .form-group label { font-size: 10px; color: #666; letter-spacing: 0.05em; text-transform: uppercase; }
-        .form-input { background: #1a1a1a; border: 1px solid #333; color: #F7F3EA; padding: 6px 10px; border-radius: 4px; font-size: 12px; width: 120px; }
-        .form-input:focus { outline: none; border-color: #555; }
-        .form-select { background: #1a1a1a; border: 1px solid #333; color: #F7F3EA; padding: 6px 10px; border-radius: 4px; font-size: 12px; }
-        .btn-add { background: #1E8E5A; border: none; color: #fff; padding: 7px 16px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; }
-        .btn-add:hover { background: #17a86a; }
-        .trade-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-        .trade-table th { text-align: left; padding: 6px 10px; border-bottom: 1px solid #333; color: #666; font-size: 10px; text-transform: uppercase; }
-        .trade-table td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; }
-        .trade-table tr:hover td { background: #151515; }
-        .btn-close { background: #1a1a1a; border: 1px solid #333; color: #aaa; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 10px; }
-        .btn-close:hover { background: #C1272D; color: #fff; border-color: #C1272D; }
-        .pnl-pos { color: #1E8E5A; font-weight: 600; }
-        .pnl-neg { color: #C1272D; font-weight: 600; }
-        @media (max-width: 600px) {
-            .heat-grid { grid-template-columns: repeat(3, 1fr); }
-            .score-table { font-size: 11px; }
-            .bar-bg { width: 50px; }
-            .form-row { flex-direction: column; }
-        }
-    </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TyLove Trading — 短炒分析</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body{background:#0b1020;color:#e6ebff;font-family:-apple-system,"PingFang HK","Microsoft JhengHei",sans-serif}
+  .card{background:#141a30;border:1px solid #222c4d;border-radius:14px}
+  .pos{color:#34d399}.neg{color:#f87171}
+  .tag{border-radius:6px;padding:1px 7px;font-size:11px}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #1e2743;font-size:13px;white-space:nowrap}
+  th{color:#8ea0c9;font-weight:500;font-size:12px}
+  .scroll{overflow-x:auto}
+</style>
 </head>
-<body>
-    <div class="header">
-        <h1><span class="status-dot"></span>港股日內交易系統</h1>
-        <div>
-            <span id="clock" style="font-size:12px;color:#666;margin-right:12px"></span>
-            <button class="refresh-btn" onclick="triggerRefresh()">↻ 更新</button>
-        </div>
+<body class="p-4 md:p-8">
+<div class="max-w-6xl mx-auto">
+
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl font-semibold">TyLove Trading</h1>
+      <p class="text-sm text-slate-400">短炒分析系統 · 買入由你本人執行</p>
     </div>
-
-    <div class="container">
-        <div id="content"><div class="loading">載入數據中...</div></div>
-        <div id="journal-section"></div>
+    <div class="flex gap-2">
+      <button onclick="act('/api/scan','掃描已開始')" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm">立即掃描</button>
+      <button onclick="act('/api/monitor','持倉已更新')" class="px-4 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm">更新持倉</button>
     </div>
+  </div>
 
-    <script>
-        var _scores = {};
+  <div id="banner" class="hidden card p-3 mb-4 text-sm"></div>
 
-        // 時鐘
-        function updateClock() {
-            document.getElementById('clock').textContent =
-                new Date().toLocaleTimeString('zh-HK', { timeZone: 'Asia/Hong_Kong', hour12: false });
-        }
-        setInterval(updateClock, 1000);
-        updateClock();
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+    <div class="card p-4"><div class="text-xs text-slate-400">上次掃描</div><div id="lastScan" class="text-sm mt-1">—</div></div>
+    <div class="card p-4"><div class="text-xs text-slate-400">達標股票</div><div id="nSignals" class="text-xl mt-1">0</div></div>
+    <div class="card p-4"><div class="text-xs text-slate-400">持倉中</div><div id="nPos" class="text-xl mt-1">0</div></div>
+    <div class="card p-4"><div class="text-xs text-slate-400">累積勝率</div><div id="winRate" class="text-xl mt-1">—</div></div>
+  </div>
 
-        // 熱力顏色
-        function heatColor(pct) {
-            var a = Math.abs(pct);
-            if (pct > 0) {
-                if (a < 0.5) return ['rgba(30,142,90,0.12)', '#1E8E5A'];
-                if (a < 1.5) return ['rgba(30,142,90,0.28)', '#1E8E5A'];
-                if (a < 3.0) return ['rgba(30,142,90,0.55)', '#0F6B40'];
-                return ['rgba(30,142,90,0.85)', '#F7F3EA'];
-            } else if (pct < 0) {
-                if (a < 0.5) return ['rgba(193,39,45,0.12)', '#C1272D'];
-                if (a < 1.5) return ['rgba(193,39,45,0.28)', '#C1272D'];
-                if (a < 3.0) return ['rgba(193,39,45,0.55)', '#8B0E13'];
-                return ['rgba(193,39,45,0.85)', '#F7F3EA'];
-            }
-            return ['rgba(107,107,107,0.15)', '#666'];
-        }
+  <div id="allowBox" class="hidden card p-3 mb-6 text-sm"></div>
 
-        function gradeClass(t) {
-            if (t >= 80) return 'g-green';
-            if (t >= 70) return 'g-yellow';
-            if (t >= 60) return 'g-orange';
-            return 'g-red';
-        }
+  <h2 class="text-lg font-semibold mb-3">📌 今日訊號（含止蝕止賺）</h2>
+  <div id="signals" class="space-y-3 mb-8"></div>
 
-        function barColor(s, m) {
-            var p = s / m;
-            if (p >= 0.8) return '#1E8E5A';
-            if (p >= 0.6) return '#E8A33D';
-            return '#C1272D';
-        }
+  <h2 class="text-lg font-semibold mb-3">💼 持倉監控</h2>
+  <div id="positions" class="mb-8"></div>
 
-        function sentClass(s) {
-            if (s === '正面' || s === '略正面') return 's-pos';
-            if (s === '負面' || s === '略負面') return 's-neg';
-            return 's-neu';
-        }
+  <h2 class="text-lg font-semibold mb-3">📊 全部股票評分</h2>
+  <div class="card scroll mb-8">
+    <table><thead><tr>
+      <th>代號</th><th>名稱</th><th>總分</th><th>技術</th><th>現價</th>
+      <th>RSI</th><th>ATR%</th><th>量比</th><th>狀態</th>
+    </tr></thead><tbody id="allBody"></tbody></table>
+  </div>
 
-        function bar(score, max) {
-            var pct   = Math.round(score / max * 100);
-            var color = barColor(score, max);
-            return score + '/' + max +
-                '<div class="bar-bg"><div class="bar-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
-        }
+  <h2 class="text-lg font-semibold mb-3">🚫 新聞否決</h2>
+  <div id="vetoed" class="card p-4 mb-8 text-sm text-slate-400">載入中…</div>
 
-        function stat(val, label, color) {
-            color = color || '#F7F3EA';
-            return '<div class="stat-card"><div class="stat-val" style="color:' + color + '">' + val + '</div>' +
-                   '<div class="stat-label">' + label + '</div></div>';
-        }
+  <h2 class="text-lg font-semibold mb-3">📰 新聞動態（近 48 小時）</h2>
+  <div id="newsBox" class="mb-10"></div>
 
-        // 載入主數據
-        async function loadData() {
-            try {
-                var res  = await fetch('/api/analysis');
-                var data = await res.json();
+  <p class="text-xs text-slate-500 pb-10">
+    本工具只提供分析，不代客下單。所有買賣決定由使用者本人執行。
+    訊號僅供參考，投資涉及風險。
+  </p>
+</div>
 
-                if (data.loading && data.results.length === 0) {
-                    document.getElementById('content').innerHTML =
-                        '<div class="loading">系統啟動中，正在載入數據...<br><small style="color:#444">首次載入需要約 30-60 秒</small></div>';
-                    setTimeout(loadData, 5000);
-                    return;
-                }
+<script>
+const $ = id => document.getElementById(id);
+function banner(msg, ok=true){
+  const b=$('banner'); b.className='card p-3 mb-4 text-sm '+(ok?'text-emerald-300':'text-rose-300');
+  b.textContent=msg; b.classList.remove('hidden'); setTimeout(()=>b.classList.add('hidden'),3500);
+}
+async function act(url,msg){
+  banner(msg);
+  await fetch(url,{method:'POST'});
+  setTimeout(load, 4000);
+}
+function cls(v){return v>=70?'tag bg-emerald-900 text-emerald-300':v>=55?'tag bg-amber-900 text-amber-300':'tag bg-slate-800 text-slate-400';}
 
-                if (data.results.length === 0) {
-                    document.getElementById('content').innerHTML =
-                        '<div class="loading">暫無數據，請稍後重試</div>';
-                    return;
-                }
+function signalCard(s){
+  const p=s.plan||{}, n=s.news||{};
+  const notes=(s.notes||[]).filter(x=>x.includes('+')).slice(0,4).join(' · ');
+  return `<div class="card p-4">
+    <div class="flex justify-between items-start mb-3">
+      <div><span class="font-semibold text-lg">${s.symbol}</span> <span class="text-slate-400">${s.name||''}</span>
+        ${s.intraday?`<div class="text-xs text-slate-500 mt-1">${s.intraday}</div>`:''}</div>
+      <div class="text-right"><div class="text-2xl font-semibold ${s.total_score>=75?'pos':''}">${s.total_score}</div>
+        <div class="text-xs text-slate-500">技術 ${s.technical_score}　新聞 ${s.news_penalty>=0?'−'+s.news_penalty:'+'+(-s.news_penalty)}</div></div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
+      <div><div class="text-xs text-slate-500">入場</div><div>${p.entry??'—'}</div></div>
+      <div><div class="text-xs text-slate-500">止蝕</div><div class="neg">${p.stop_loss??'—'} (${p.stop_pct??''}%)</div></div>
+      <div><div class="text-xs text-slate-500">目標一（減半）</div><div class="pos">${p.target1??'—'} (${p.target1_pct??''}%)</div></div>
+      <div><div class="text-xs text-slate-500">目標二（清倉）</div><div class="pos">${p.target2??'—'} (${p.target2_pct??''}%)</div></div>
+    </div>
+    <div class="text-xs text-slate-400 mb-2">建議注碼 <b class="text-slate-200">${p.shares??0} 股</b>
+      · 約 HK$${(p.capital_used||0).toLocaleString()} · 最大虧損 HK$${(p.max_loss_hkd||0).toLocaleString()}
+      · 風險回報比 ${p.rr_ratio??'—'}</div>
+    ${n.catalyst?`<div class="text-xs text-indigo-300 mb-1">催化劑：${n.catalyst}</div>`:''}
+    ${n.reason?`<div class="text-xs text-slate-500 mb-1">新聞：${n.reason}</div>`:''}
+    ${notes?`<div class="text-xs text-slate-500">${notes}</div>`:''}
+  </div>`;
+}
 
-                render(data);
+function posCard(p){
+  const icon={EXIT:'🔴',TRIM:'🟡',WATCH:'🟠',HOLD:'🟢'}[p.action]||'⚪';
+  return `<div class="card p-4 mb-3">
+    <div class="flex justify-between"><div class="font-semibold">${icon} ${p.symbol} ${p.name||''}</div>
+      <div class="${p.pnl_pct>=0?'pos':'neg'} font-semibold">${p.pnl_pct>=0?'+':''}${p.pnl_pct}%　HK$${(p.pnl_hkd||0).toLocaleString()}</div></div>
+    <div class="text-xs text-slate-400 mt-2">入場 ${p.entry} → 現價 ${p.price}　|　止蝕 ${p.stop_loss} (距 ${p.dist_to_stop_pct}%) ${p.stop_moved?'↑已上移':''}　|　目標一 ${p.target1} (距 ${p.dist_to_target1_pct}%)</div>
+    <div class="text-sm mt-2">建議：<b>${p.action}</b> — ${p.reason}</div>
+  </div>`;
+}
 
-            } catch(e) {
-                document.getElementById('content').innerHTML =
-                    '<div class="loading">載入失敗，請重試</div>';
-            }
-        }
+async function load(){
+  const r = await fetch('/api/state'); const d = await r.json();
+  $('lastScan').textContent = d.last_scan || '尚未掃描';
+  $('nSignals').textContent = (d.signals||[]).length;
+  $('nPos').textContent = (d.open_positions||[]).length;
+  const st = d.stats||{};
+  $('winRate').textContent = st.trades ? st.win_rate+'% ('+st.trades+'筆)' : '—';
 
-        // 手動更新
-        async function triggerRefresh() {
-            await fetch('/api/refresh');
-            document.getElementById('content').innerHTML =
-                '<div class="loading">更新中，請稍候...</div>';
-            setTimeout(loadData, 5000);
-        }
+  const a = d.allow_new||{};
+  const ab=$('allowBox');
+  if(a.reason){ ab.textContent='📋 倉位提示：'+a.reason; ab.classList.remove('hidden'); }
+  else ab.classList.add('hidden');
 
-        // 渲染主面板
-        function render(data) {
-            var R = data.results;
-            var h = '';
+  $('signals').innerHTML = (d.signals||[]).length
+    ? d.signals.map(signalCard).join('')
+    : '<div class="card p-4 text-sm text-slate-400">今日暫無股票達到入場門檻。寧願唔做，都好過亂做。</div>';
 
-            // 儲存評分
-            R.forEach(function(r) { _scores[r.symbol] = r.total; });
+  $('positions').innerHTML = (d.positions||[]).length
+    ? d.positions.map(posCard).join('')
+    : '<div class="card p-4 text-sm text-slate-400">手上沒有持倉。</div>';
 
-            // 熱力矩陣
-            h += '<div class="section-title">Watchlist 熱力矩陣</div><div class="heat-grid">';
-            R.forEach(function(r) {
-                var c    = heatColor(r.change_pct);
-                var sign = r.change_pct >= 0 ? '+' : '';
-                h += '<div class="heat-cell" style="background:' + c[0] + '">' +
-                     '<div class="cell-symbol" style="color:' + c[1] + '">' + r.symbol.replace('.HK','') + '</div>' +
-                     '<div class="cell-change" style="color:' + c[1] + '">' + sign + r.change_pct.toFixed(2) + '%</div>' +
-                     '<div class="cell-price" style="color:' + c[1] + '">' + r.price.toFixed(2) + '</div>' +
-                     '</div>';
-            });
-            h += '</div>';
+  $('allBody').innerHTML = (d.all||[]).map(s=>{
+    const sn=s.snapshot||{};
+    return `<tr><td>${s.symbol}</td><td>${s.name||''}</td>
+      <td><span class="${cls(s.total_score)}">${s.total_score}</span></td>
+      <td>${s.technical_score}</td><td>${s.price}</td>
+      <td>${(sn.rsi||0).toFixed(0)}</td><td>${(sn.atr_pct||0).toFixed(1)}%</td>
+      <td>${(sn.vol_ratio||0).toFixed(1)}x</td>
+      <td>${s.veto?'<span class="tag bg-rose-900 text-rose-300">否決</span>':(s.pass_filter?'<span class="tag bg-emerald-900 text-emerald-300">通過</span>':'<span class="tag bg-slate-800 text-slate-400">'+s.filter_reason+'</span>')}</td></tr>`;
+  }).join('');
 
-            // 評分排行
-            h += '<div class="section-title">評分排行</div>';
-            h += '<table class="score-table"><thead><tr>' +
-                 '<th>股票</th><th>總分</th><th>評級</th><th>技術面</th><th>風險面</th><th>新聞面</th><th>建議</th>' +
-                 '</tr></thead><tbody>';
-            R.forEach(function(r) {
-                var ns = (r.news && r.news.score) ? r.news.score : 15;
-                h += '<tr>' +
-                     '<td><strong>' + r.symbol + '</strong><br><span style="color:#666;font-size:10px">' + r.price.toFixed(3) + '</span></td>' +
-                     '<td><strong style="font-size:16px">' + r.total + '</strong><span style="color:#444;font-size:10px">/100</span></td>' +
-                     '<td><span class="grade ' + gradeClass(r.total) + '">' + r.grade + '</span></td>' +
-                     '<td>' + bar(r.technical.score, 50) + '</td>' +
-                     '<td>' + bar(r.risk.score, 20) + '</td>' +
-                     '<td>' + bar(ns, 30) + '</td>' +
-                     '<td style="color:#888;font-size:11px">' + r.action + '</td>' +
-                     '</tr>';
-            });
-            h += '</tbody></table>';
+  $('vetoed').innerHTML = (d.vetoed||[]).length
+    ? d.vetoed.map(v=>`<div class="mb-2"><b>${v.symbol} ${v.name}</b> — ${(v.news||{}).reason||''}</div>`).join('')
+    : '✅ 今日無股票觸發新聞否決（即無重大負面事件）';
 
-            // 新聞
-            var wn = R.filter(function(r) { return r.news && r.news.headlines && r.news.headlines.length > 0; });
-            if (wn.length > 0) {
-                h += '<div class="section-title">最新新聞</div>';
-                wn.forEach(function(r) {
-                    var nl = (r.news && r.news.label) ? r.news.label : '中性';
-                    h += '<div class="news-card">';
-                    h += '<div class="news-label">' + r.symbol +
-                         ' <span class="sent ' + sentClass(nl) + '">' + nl + '</span>' +
-                         '<span style="color:#444;font-size:10px"> ' + r.news.score + '/30分</span></div>';
-                    r.news.headlines.forEach(function(hl) {
-                        h += '<div class="news-item">• ' + hl + '</div>';
-                    });
-                    if (r.news.summary) {
-                        h += '<div class="ai-box">🤖 ' + r.news.summary + '</div>';
-                    }
-                    h += '</div>';
-                });
-            }
+  renderNews(d.all||[]);
+}
 
-            h += '<div class="notice">數據更新：' + data.updated_at + ' HKT ｜ yfinance 15分鐘延遲 ｜ 僅供參考</div>';
-            document.getElementById('content').innerHTML = h;
+function newsTag(n){
+  if(n.veto) return ['重大負面','bg-rose-900 text-rose-300'];
+  if(n.sentiment==='positive') return ['偏正面','bg-emerald-900 text-emerald-300'];
+  if(n.sentiment==='negative') return ['偏負面','bg-amber-900 text-amber-300'];
+  return ['中性','bg-slate-800 text-slate-400'];
+}
 
-            // 更新日誌面板嘅股票選項
-            updateSymbolOptions(R);
-        }
-
-        function updateSymbolOptions(results) {
-            var sel = document.getElementById('j-symbol');
-            if (!sel) return;
-            sel.innerHTML = '';
-            results.forEach(function(r) {
-                var opt = document.createElement('option');
-                opt.value = r.symbol;
-                opt.textContent = r.symbol + ' (' + r.total + '分)';
-                sel.appendChild(opt);
-            });
-        }
-
-        // ── 交易日誌 ─────────────────────────────
-
-        function renderJournal(data) {
-            var stats  = data.stats;
-            var trades = data.trades;
-            var open   = trades.filter(function(t) { return t.status === 'open'; });
-            var closed = trades.filter(function(t) { return t.status === 'closed'; });
-
-            var h = '<div class="section-title">模擬交易日誌</div>';
-
-            // 統計
-            h += '<div class="stats-grid">';
-            h += stat(stats.total, '總交易次數');
-            h += stat(stats.win_rate + '%', '勝率', stats.win_rate >= 50 ? '#1E8E5A' : '#C1272D');
-            h += stat(stats.wins, '贏', '#1E8E5A');
-            h += stat(stats.losses, '輸', '#C1272D');
-            h += stat((stats.total_pnl >= 0 ? '+' : '') + stats.total_pnl, '總盈虧(HKD)', stats.total_pnl >= 0 ? '#1E8E5A' : '#C1272D');
-            h += stat(stats.avg_win + '%', '平均盈利', '#1E8E5A');
-            h += stat(stats.avg_loss + '%', '平均虧損', '#C1272D');
-            h += '</div>';
-
-            // 新增表單
-            h += '<div class="add-trade-form">';
-            h += '<div style="font-size:11px;color:#666;margin-bottom:10px;letter-spacing:0.05em">新增模擬交易</div>';
-            h += '<div class="form-row">';
-            h += '<div class="form-group"><label>股票</label><select class="form-select" id="j-symbol"></select></div>';
-            h += '<div class="form-group"><label>方向</label><select class="form-select" id="j-dir"><option value="買入">買入</option><option value="賣出">賣出</option></select></div>';
-            h += '<div class="form-group"><label>入場價</label><input class="form-input" id="j-entry" type="number" step="0.001" placeholder="0.000"></div>';
-            h += '<div class="form-group"><label>數量</label><input class="form-input" id="j-qty" type="number" value="1000"></div>';
-            h += '<div class="form-group"><label>備註</label><input class="form-input" id="j-note" type="text" placeholder="入場原因..." style="width:180px"></div>';
-            h += '<div class="form-group"><label>&nbsp;</label><button class="btn-add" onclick="addTrade()">+ 記錄</button></div>';
-            h += '</div></div>';
-
-            // 未平倉
-            if (open.length > 0) {
-                h += '<div style="font-size:11px;color:#E8A33D;margin:12px 0 6px;letter-spacing:0.05em">未平倉 (' + open.length + ')</div>';
-                h += '<table class="trade-table"><thead><tr><th>時間</th><th>股票</th><th>方向</th><th>評分</th><th>入場價</th><th>數量</th><th>備註</th><th>平倉</th></tr></thead><tbody>';
-                open.forEach(function(t) {
-                    h += '<tr>' +
-                         '<td style="color:#666">' + t.created_at + '</td>' +
-                         '<td><strong>' + t.symbol + '</strong></td>' +
-                         '<td>' + t.direction + '</td>' +
-                         '<td>' + (t.score || '-') + '</td>' +
-                         '<td>' + t.entry_price.toFixed(3) + '</td>' +
-                         '<td>' + t.qty + '</td>' +
-                         '<td style="color:#666">' + (t.note || '-') + '</td>' +
-                         '<td><input id="ep-' + t.id + '" class="form-input" type="number" step="0.001" placeholder="出場價" style="width:90px">' +
-                         ' <button class="btn-close" onclick="closeTrade(' + t.id + ')">平倉</button></td>' +
-                         '</tr>';
-                });
-                h += '</tbody></table>';
-            }
-
-            // 歷史
-            if (closed.length > 0) {
-                h += '<div style="font-size:11px;color:#666;margin:16px 0 6px;letter-spacing:0.05em">歷史記錄 (' + closed.length + ')</div>';
-                h += '<table class="trade-table"><thead><tr><th>時間</th><th>股票</th><th>方向</th><th>評分</th><th>入場</th><th>出場</th><th>盈虧%</th><th>結果</th><th>備註</th></tr></thead><tbody>';
-                closed.forEach(function(t) {
-                    var pnlClass = t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-                    var pnlSign  = t.pnl_pct >= 0 ? '+' : '';
-                    h += '<tr>' +
-                         '<td style="color:#666">' + t.created_at + '</td>' +
-                         '<td><strong>' + t.symbol + '</strong></td>' +
-                         '<td>' + t.direction + '</td>' +
-                         '<td>' + (t.score || '-') + '</td>' +
-                         '<td>' + t.entry_price.toFixed(3) + '</td>' +
-                         '<td>' + (t.exit_price ? t.exit_price.toFixed(3) : '-') + '</td>' +
-                         '<td class="' + pnlClass + '">' + pnlSign + t.pnl_pct + '%</td>' +
-                         '<td class="' + pnlClass + '">' + (t.result || '-') + '</td>' +
-                         '<td style="color:#666">' + (t.note || '-') + '</td>' +
-                         '</tr>';
-                });
-                h += '</tbody></table>';
-            }
-
-            if (trades.length === 0) {
-                h += '<div style="text-align:center;padding:30px;color:#444;font-size:12px">未有交易記錄<br>填寫上方表單開始記錄</div>';
-            }
-
-            document.getElementById('journal-section').innerHTML = h;
-
-            // 更新股票選項
-            if (Object.keys(_scores).length > 0) {
-                var sel = document.getElementById('j-symbol');
-                if (sel && sel.options.length === 0) {
-                    Object.keys(_scores).forEach(function(sym) {
-                        var opt = document.createElement('option');
-                        opt.value = sym;
-                        opt.textContent = sym + ' (' + _scores[sym] + '分)';
-                        sel.appendChild(opt);
-                    });
-                }
-            }
-        }
-
-        async function addTrade() {
-            var symbol = document.getElementById('j-symbol').value;
-            var dir    = document.getElementById('j-dir').value;
-            var entry  = parseFloat(document.getElementById('j-entry').value);
-            var qty    = parseInt(document.getElementById('j-qty').value) || 1000;
-            var note   = document.getElementById('j-note').value;
-
-            if (!entry || entry <= 0) { alert('請輸入入場價'); return; }
-
-            var res = await fetch('/api/journal/add', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ symbol: symbol, score: _scores[symbol] || 0, direction: dir, entry_price: entry, qty: qty, note: note })
-            });
-            var data = await res.json();
-            if (data.success) {
-                document.getElementById('j-entry').value = '';
-                document.getElementById('j-note').value  = '';
-                loadJournal();
-            }
-        }
-
-        async function closeTrade(id) {
-            var exitInput = document.getElementById('ep-' + id);
-            var exitPrice = parseFloat(exitInput.value);
-            if (!exitPrice || exitPrice <= 0) { alert('請輸入出場價'); return; }
-            var res = await fetch('/api/journal/close', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ id: id, exit_price: exitPrice })
-            });
-            var data = await res.json();
-            if (data.success) { loadJournal(); }
-        }
-
-        async function loadJournal() {
-            try {
-                var res  = await fetch('/api/journal');
-                var data = await res.json();
-                renderJournal(data);
-            } catch(e) {
-                console.log('Journal load failed:', e);
-            }
-        }
-
-        // 啟動
-        loadData();
-        loadJournal();
-        setInterval(loadData, 300000);
-    </script>
+function renderNews(rows){
+  const box=$('newsBox');
+  if(!rows.length){ box.innerHTML='<div class="card p-4 text-sm text-slate-400">尚未掃描。按右上角「立即掃描」開始。</div>'; return; }
+  const withNews = rows.filter(s=>s.news && (((s.news.titles||[]).length>0) || s.news.reason));
+  if(!withNews.length){ box.innerHTML='<div class="card p-4 text-sm text-slate-400">本次掃描嘅股票都未抓到相關新聞。</div>'; return; }
+  box.innerHTML = withNews.map(s=>{
+    const n=s.news||{}, t=newsTag(n), items=(n.titles||[]).slice(0,4);
+    return `<div class="card p-4 mb-3">
+      <div class="flex justify-between items-center mb-2">
+        <div><span class="font-semibold">${s.symbol}</span> <span class="text-slate-400 text-sm">${s.name||''}</span></div>
+        <span class="tag ${t[1]}">${t[0]}</span>
+      </div>
+      ${items.length
+        ? `<ul class="text-sm text-slate-300 list-disc pl-5 space-y-1">${items.map(x=>`<li>${x}</li>`).join('')}</ul>`
+        : '<div class="text-sm text-slate-400">近 48 小時無相關新聞</div>'}
+      ${n.catalyst?`<div class="text-xs text-indigo-300 mt-2">催化劑：${n.catalyst}</div>`:''}
+      ${n.reason?`<div class="text-xs text-slate-500 mt-1">判斷：${n.reason}</div>`:''}
+    </div>`;
+  }).join('');
+}
+load(); setInterval(load, 60000);
+</script>
 </body>
 </html>

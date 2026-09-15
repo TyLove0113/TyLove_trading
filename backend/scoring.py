@@ -1,293 +1,178 @@
-# ─────────────────────────────────────────
-# scoring.py — 股票評分系統
-# 根據技術面、消息面、風險面計算 0-100 分
-# ─────────────────────────────────────────
+"""
+評分系統 v2 — 修正原版三個實質錯誤
+  1. 原版用「漲跌幅」當成交量代理 → 新版用真實 Volume / 20 日均量
+  2. 原版 abs(change_pct) 同時被計成「成交活躍(+10)」同「波動過大(+2)」→ 同一個數字計兩次
+     新版：成交量只看量比，波動只看 ATR%，兩者輸入完全唔同
+  3. 原版冇相對強度 → 新版加入「跑贏恒指」維度，呢個係短線選股最有效嘅因子之一
 
-import config
+100 分結構（純技術，唔含新聞）：
+   趨勢結構    25
+   動能        20
+   成交量      20
+   波動質素    15
+   相對強度    20
+新聞只做否決/扣分，另計。
+"""
+from config import MAX_ATR_PCT, MIN_ATR_PCT, MIN_TURNOVER_HKD
 
-def score_technical(data: dict) -> dict:
-    """
-    技術面評分（50分）
-    ├─ 趨勢方向（MA排列）：15分
-    ├─ RSI 位置：15分
-    ├─ 成交量：10分
-    └─ 價格位置：10分
-    """
-    score  = 0
-    detail = {}
 
-    # ── 趨勢方向（MA5 vs MA20）──────────────
-    ma5   = data.get("ma5", 0)
-    ma20  = data.get("ma20", 0)
-    price = data.get("price", 0)
+def _trend(s: dict) -> tuple[float, list[str]]:
+    """趨勢結構 25 分。"""
+    score, notes = 0.0, []
+    close, ma5, ma20, ma50 = s["close"], s["ma5"], s["ma20"], s["ma50"]
 
-    if ma5 > ma20 and price > ma5:
-        trend_score = 15      # 強勢多頭
-        trend_label = "強勢上升"
-    elif ma5 > ma20:
-        trend_score = 10      # 溫和多頭
-        trend_label = "溫和上升"
-    elif ma5 < ma20 and price < ma5:
-        trend_score = 0       # 強勢空頭
-        trend_label = "強勢下跌"
-    else:
-        trend_score = 5       # 橫行
-        trend_label = "橫行整固"
+    if ma20 and close > ma20:
+        score += 8
+        notes.append("價在MA20上 +8")
+    if ma5 and ma20 and ma5 > ma20:
+        score += 7
+        notes.append("MA5>MA20 多頭排列 +7")
+    if s["ma20_slope"] > 0.15:
+        score += 10
+        notes.append(f"MA20 上升中（{s['ma20_slope']:.2f}%/支）+10")
+    elif s["ma20_slope"] > 0:
+        score += 5
+        notes.append("MA20 微升 +5")
+    if ma50 and close > ma50:
+        notes.append("站穩MA50")
+    if s["adx"] >= 25:
+        notes.append(f"ADX {s['adx']:.0f} 趨勢明確（僅供參考，唔重複加分）")
+    return min(score, 25.0), notes
 
-    score += trend_score
-    detail["趨勢"] = f"{trend_label} ({trend_score}/15)"
 
-    # ── RSI 位置 ──────────────────────────
-    rsi = data.get("rsi", 50)
+def _momentum(s: dict) -> tuple[float, list[str]]:
+    """動能 20 分。"""
+    score, notes = 0.0, []
+    rsi, hist, hist_prev = s["rsi"], s["macd_hist"], s["hist_prev"]
 
-    if 30 <= rsi <= 50:
-        rsi_score = 15        # 超賣回升，最佳入場區
-        rsi_label = "超賣回升 ✅"
-    elif 50 < rsi <= 65:
-        rsi_score = 10        # 健康上升
-        rsi_label = "健康上升"
-    elif 65 < rsi <= 75:
-        rsi_score = 5         # 偏熱
-        rsi_label = "偏熱注意"
+    if 50 <= rsi <= 68:
+        score += 10
+        notes.append(f"RSI {rsi:.0f} 強勢未超買 +10")
+    elif 45 <= rsi < 50 or 68 < rsi <= 75:
+        score += 6
+        notes.append(f"RSI {rsi:.0f} 中性偏強 +6")
+    elif rsi > 80:
+        notes.append(f"RSI {rsi:.0f} 嚴重超買，追入風險高")
     elif rsi < 30:
-        rsi_score = 8         # 極度超賣，反彈機會但有風險
-        rsi_label = "極度超賣"
+        notes.append(f"RSI {rsi:.0f} 超賣，可留意反彈但唔係強勢")
+
+    if hist > 0 and hist > hist_prev:
+        score += 10
+        notes.append("MACD 柱狀放大 +10")
+    elif hist > 0:
+        score += 6
+        notes.append("MACD 柱狀為正 +6")
+    elif hist > hist_prev:
+        score += 3
+        notes.append("MACD 柱狀收窄中 +3")
+    return min(score, 20.0), notes
+
+
+def _volume(s: dict) -> tuple[float, list[str]]:
+    """成交量 20 分 —— 只用真實量比，同波動完全分開。"""
+    score, notes = 0.0, []
+    ratio = s["vol_ratio"]
+
+    if ratio >= 1.8:
+        score += 12
+        notes.append(f"量比 {ratio:.1f}x 明顯放量 +12")
+    elif ratio >= 1.3:
+        score += 9
+        notes.append(f"量比 {ratio:.1f}x 溫和放量 +9")
+    elif ratio >= 1.0:
+        score += 5
+        notes.append(f"量比 {ratio:.1f}x 正常 +5")
     else:
-        rsi_score = 0         # 超買，唔追
-        rsi_label = "超買 ❌"
+        notes.append(f"量比 {ratio:.1f}x 縮量，動力不足")
 
-    score += rsi_score
-    detail["RSI"] = f"{rsi:.1f} — {rsi_label} ({rsi_score}/15)"
-
-    # ── 成交量 ────────────────────────────
-    # 暫時用漲跌幅同 RSI 推算（之後接真實成交量數據再優化）
-    change_pct = abs(data.get("change_pct", 0))
-
-    if change_pct > 2.0:
-        vol_score = 10        # 大幅波動，有資金入場
-        vol_label = "成交活躍"
-    elif change_pct > 1.0:
-        vol_score = 6
-        vol_label = "成交正常"
-    else:
-        vol_score = 3
-        vol_label = "成交清淡"
-
-    score += vol_score
-    detail["成交量"] = f"{vol_label} ({vol_score}/10)"
-
-    # ── 價格位置（相對 MA20）──────────────
-    if ma20 > 0:
-        pct_from_ma20 = (price - ma20) / ma20 * 100
-        if -2 <= pct_from_ma20 <= 3:
-            pos_score = 10    # 靠近 MA20，理想入場區
-            pos_label = "MA20 支撐附近 ✅"
-        elif 3 < pct_from_ma20 <= 8:
-            pos_score = 6
-            pos_label = "MA20 以上"
-        elif pct_from_ma20 > 8:
-            pos_score = 2
-            pos_label = "遠離 MA20，追高風險"
-        else:
-            pos_score = 4
-            pos_label = "MA20 以下"
-    else:
-        pos_score = 5
-        pos_label = "無法計算"
-
-    score += pos_score
-    detail["價格位置"] = f"{pos_label} ({pos_score}/10)"
-
-    return {"score": score, "max": 50, "detail": detail}
+    if s["close"] * s["volume"] >= s["turnover_ma20"] * 1.2 and s["turnover_ma20"] > 0:
+        score += 8
+        notes.append("今日成交額高於 20 日均 20% +8")
+    elif s["turnover_ma20"] > 0:
+        score += 3
+        notes.append("成交額平穩 +3")
+    return min(score, 20.0), notes
 
 
-def score_risk(data: dict) -> dict:
-    """
-    風險面評分（20分）
-    ├─ 波動率：10分
-    └─ 趨勢一致性：10分
-    """
-    score  = 0
-    detail = {}
-
-    # ── 波動率（用漲跌幅衡量）────────────
-    change_pct = abs(data.get("change_pct", 0))
-
-    if change_pct <= 2.0:
-        vol_score = 10        # 波動適中，風險可控
-        vol_label = "波動可控 ✅"
-    elif change_pct <= 4.0:
-        vol_score = 6
-        vol_label = "波動略高"
-    else:
-        vol_score = 2         # 波動過大，風險高
-        vol_label = "波動過大 ⚠️"
-
-    score += vol_score
-    detail["波動率"] = f"{vol_label} ({vol_score}/10)"
-
-    # ── 趨勢一致性 ────────────────────────
-    rsi        = data.get("rsi", 50)
-    change_pct_raw = data.get("change_pct", 0)
-    above_ma5  = data.get("above_ma5", False)
-
-    # RSI 同價格走勢一致 = 低風險
-    if change_pct_raw > 0 and rsi > 45 and above_ma5:
-        cons_score = 10
-        cons_label = "趨勢一致 ✅"
-    elif change_pct_raw < 0 and rsi < 55:
-        cons_score = 6
-        cons_label = "下跌趨勢一致"
-    else:
-        cons_score = 4
-        cons_label = "趨勢背離，需注意"
-
-    score += cons_score
-    detail["趨勢一致性"] = f"{cons_label} ({cons_score}/10)"
-
-    return {"score": score, "max": 20, "detail": detail}
+def _volatility(s: dict) -> tuple[float, list[str]]:
+    """波動質素 15 分 —— ATR% 有甜區：太死無肉食，太癲係賭博。"""
+    atr_pct = s["atr_pct"]
+    notes = []
+    if 2.0 <= atr_pct <= 4.5:
+        notes.append(f"ATR {atr_pct:.1f}% 短炒甜區 +15")
+        return 15.0, notes
+    if 1.5 <= atr_pct < 2.0 or 4.5 < atr_pct <= 6.0:
+        notes.append(f"ATR {atr_pct:.1f}% 可接受 +9")
+        return 9.0, notes
+    if atr_pct < MIN_ATR_PCT:
+        notes.append(f"ATR {atr_pct:.1f}% 太死，日內無波幅")
+        return 0.0, notes
+    if atr_pct > MAX_ATR_PCT:
+        notes.append(f"ATR {atr_pct:.1f}% 波動過大，風險失控")
+        return 0.0, notes
+    notes.append(f"ATR {atr_pct:.1f}% 偏低 +3")
+    return 3.0, notes
 
 
-def score_news(symbol: str, total_score: int = 0) -> dict:
-    """
-    消息面評分（30分）
-    呼叫 news_sentiment 模組
-    """
-    try:
-        from news_sentiment import analyse_stock_news
-        return analyse_stock_news(symbol, total_score)
-    except Exception as e:
-        print(f"  ⚠️ 新聞分析失敗 {symbol}: {e}")
-        return {
-            "score":   15,
-            "max":     30,
-            "label":   "中性",
-            "detail":  {"新聞情緒": "分析失敗，給予中性分數（15/30）"},
-            "summary": "",
-        }
+def _relative_strength(s: dict) -> tuple[float, list[str]]:
+    """相對強度 20 分 —— 跑贏恒指先值得短炒。"""
+    rs = s["rs_20d"]
+    if rs >= 8:
+        return 20.0, [f"20 日跑贏恒指 {rs:+.1f}% 強勢 +20"]
+    if rs >= 4:
+        return 15.0, [f"20 日跑贏恒指 {rs:+.1f}% +15"]
+    if rs >= 0:
+        return 9.0, [f"20 日略勝恒指 {rs:+.1f}% +9"]
+    if rs >= -5:
+        return 3.0, [f"20 日跑輸恒指 {rs:+.1f}% +3"]
+    return 0.0, [f"20 日跑輸恒指 {rs:+.1f}% 弱勢，唔值搏"]
 
 
-def calculate_total_score(data: dict, run_news: bool = True) -> dict:
-    """
-    計算綜合評分
-    """
-    technical = score_technical(data)
-    risk      = score_risk(data)
+def liquidity_filter(s: dict) -> tuple[bool, str]:
+    """入場硬性過濾：唔夠成交額就唔好玩。"""
+    if s["close"] < 1.0:
+        return False, "股價低於 HK$1，屬仙股風險"
+    if s["turnover_ma20"] < MIN_TURNOVER_HKD:
+        return False, f"20 日均成交額僅 {s['turnover_ma20']/1e6:.0f} 百萬，流動性不足"
+    if s["atr_pct"] < MIN_ATR_PCT:
+        return False, f"ATR 只有 {s['atr_pct']:.1f}%，短線無波幅"
+    return True, ""
 
-    # 先用技術+風險分數估算，決定係咪做新聞分析
-    estimated_total = technical["score"] + risk["score"] + 15
 
-    if run_news:
-        news = score_news(data["symbol"], estimated_total)
-    else:
-        news = {"score": 15, "max": 30, "label": "中性",
-                "detail": {"新聞情緒": "跳過（15/30）"}, "summary": ""}
+def score_technical(s: dict) -> dict:
+    trend, t_notes = _trend(s)
+    momentum, m_notes = _momentum(s)
+    volume, v_notes = _volume(s)
+    vola, vo_notes = _volatility(s)
+    rs, rs_notes = _relative_strength(s)
 
-    total = technical["score"] + risk["score"] + news["score"]
-
-    # 評級
-    if total >= 80:
-        grade  = "🟢 強烈留意"
-        action = "條件理想，值得重點關注"
-    elif total >= 70:
-        grade  = "🟡 值得留意"
-        action = "條件不錯，可以考慮入場"
-    elif total >= 60:
-        grade  = "🟠 一般"
-        action = "條件一般，建議觀望"
-    else:
-        grade  = "🔴 跳過"
-        action = "條件不足，唔符合入場要求"
-
+    total = trend + momentum + volume + vola + rs
     return {
-        "symbol":     data["symbol"],
-        "price":      data["price"],
-        "change_pct": data["change_pct"],
-        "total":      total,
-        "grade":      grade,
-        "action":     action,
-        "technical":  technical,
-        "risk":       risk,
-        "news":       news,
+        "technical_score": round(total, 1),
+        "breakdown": {
+            "趨勢結構(25)": round(trend, 1),
+            "動能(20)": round(momentum, 1),
+            "成交量(20)": round(volume, 1),
+            "波動質素(15)": round(vola, 1),
+            "相對強度(20)": round(rs, 1),
+        },
+        "notes": t_notes + m_notes + v_notes + vo_notes + rs_notes,
     }
 
 
-def score_all_stocks(stocks: list) -> list:
-    """
-    對所有股票評分並排序
-    """
-    results = []
-    for stock in stocks:
-        result = calculate_total_score(stock)
-        results.append(result)
-
-    # 由高到低排序
-    results.sort(key=lambda x: x["total"], reverse=True)
-    return results
-
-
-def print_score_report(results: list):
-    """印出評分報告（含新聞分析）"""
-    print("\n" + "═" * 55)
-    print("  📊 港股評分報告")
-    print("═" * 55)
-
-    for r in results:
-        sign = "▲" if r["change_pct"] >= 0 else "▼"
-        print(f"\n  {r['symbol']:<12} "
-              f"{r['price']:>8.3f}  "
-              f"{sign}{abs(r['change_pct']):.2f}%")
-        print(f"  總分：{r['total']}/100  {r['grade']}")
-        print(f"  建議：{r['action']}")
-
-        # 技術面
-        print(f"  技術面（{r['technical']['score']}/50）：")
-        for k, v in r['technical']['detail'].items():
-            print(f"    {k}：{v}")
-
-        # 風險面
-        print(f"  風險面（{r['risk']['score']}/20）：")
-        for k, v in r['risk']['detail'].items():
-            print(f"    {k}：{v}")
-
-        # 新聞面
-        news = r.get("news", {})
-        print(f"  新聞面（{news.get('score', 15)}/30）：")
-        for k, v in news.get("detail", {}).items():
-            print(f"    {k}：{v}")
-
-        # 新聞標題
-        headlines = news.get("headlines", [])
-        if headlines:
-            print(f"  新聞標題：")
-            for h in headlines:
-                print(f"    • {h}")
-
-        # AI 詳細分析（只有高分股票先有）
-        summary = news.get("summary", "")
-        if summary:
-            print(f"  🤖 AI 分析：")
-            for line in summary.split("\n"):
-                if line.strip():
-                    print(f"    {line}")
-
-    print("\n" + "═" * 55)
-
-    # 值得留意嘅股票
-    top = [r for r in results if r["total"] >= 70]
-    if top:
-        print(f"\n  🔔 今日值得留意（{len(top)} 隻）：")
-        for r in top:
-            print(f"    {r['symbol']}  {r['total']}分  {r['grade']}")
-    else:
-        print("\n  今日暫無符合條件嘅股票")
-
-    print("═" * 55 + "\n")
-
-
-# ── 測試用 ────────────────────────────────
-if __name__ == "__main__":
-    from data_fetcher import get_all_stocks
-    stocks  = get_all_stocks()
-    results = score_all_stocks(stocks)
-    print_score_report(results)
+def combine(technical: dict, news: dict, s: dict) -> dict:
+    """技術分 + 新聞調整 = 總分。新聞只扣分或小額加分。"""
+    ok, reason = liquidity_filter(s)
+    total = technical["technical_score"] + news["penalty"]
+    total = max(0.0, min(100.0, total))
+    return {
+        "total_score": round(total, 1),
+        "technical_score": technical["technical_score"],
+        "news_penalty": news["penalty"],
+        "veto": news["veto"],
+        "pass_filter": ok,
+        "filter_reason": reason,
+        "breakdown": technical["breakdown"],
+        "notes": technical["notes"],
+        "news": news,
+    }

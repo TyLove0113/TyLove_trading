@@ -1,47 +1,86 @@
+"""
+TyLove Trading v2 — 中央設定
+所有可調參數集中在這裡，改一個地方就可以。
+"""
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
-import pytz 
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
 
-# 香港時區
-HK_TZ = pytz.timezone("Asia/Hong_Kong") 
+load_dotenv(ROOT_DIR / ".env")
+load_dotenv(BASE_DIR / ".env")
 
-# Telegram
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+HK_TZ = "Asia/Hong_Kong"
 
-# OpenAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+# ---------------------------------------------------------------- 憑證
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
-# 港股 Watchlist
-HK_STOCKS = [
-    "0700.HK",  # 騰訊
-    "0005.HK",  # 匯豐
-    "1398.HK",  # 工商銀行
-    "0388.HK",  # 港交所
-    "2318.HK",  # 平安保險
-    "0941.HK",  # 中國移動
-    "1299.HK",  # 友邦保險
-    "3690.HK",  # 美團
-    "0016.HK",  # 新鴻基
-    "2388.HK",  # 中銀香港
+# ---------------------------------------------------------------- 市場
+BENCHMARK = "^HSI"
+
+# 短炒觀察名單：以大流動性、有波幅嘅港股為主。自己隨意加減。
+WATCHLIST = [
+    "0700.HK",   # 騰訊
+    "9988.HK",   # 阿里巴巴
+    "3690.HK",   # 美團
+    "1810.HK",   # 小米
+    "9618.HK",   # 京東
+    "1211.HK",   # 比亞迪
+    "2318.HK",   # 中國平安
+    "0388.HK",   # 香港交易所
+    "2020.HK",   # 安踏體育
+    "0981.HK",   # 中芯國際
+    "2382.HK",   # 舜宇光學
+    "6690.HK",   # 海爾智家
 ]
 
-# 評分權重
-SCORE_WEIGHTS = {
-    "technical": 50,
-    "news":      30,
-    "risk":      20,
-}
+# ---------------------------------------------------------------- 評分
+# 訊號門檻：>= ALERT_THRESHOLD 才出「可留意」通知
+ALERT_THRESHOLD = int(os.getenv("ALERT_THRESHOLD", "70"))
+WATCH_THRESHOLD = int(os.getenv("WATCH_THRESHOLD", "58"))
 
-# 推送閾值
-ALERT_THRESHOLD = 70
+# 新聞只做「否決 / 扣分」，唔做加分主力
+NEWS_VETO_PENALTY = 30       # 重大負面：直接否決
+NEWS_MEDIUM_PENALTY = 12     # 中度負面：扣分
+NEWS_BONUS_CAP = 5           # 正面新聞最多加 5 分（避免新聞噪音主導）
 
-# 數據更新頻率（分鐘）
-UPDATE_INTERVAL = 5
+# ---------------------------------------------------------------- 流動性 / 入場硬性過濾
+MIN_TURNOVER_HKD = float(os.getenv("MIN_TURNOVER_HKD", "50000000"))  # 20 日平均成交額 ≥ 5000 萬
+MIN_PRICE_HKD = 1.0
+MIN_ATR_PCT = 1.2            # ATR% 低過呢個 = 太死，短炒無肉食
+MAX_ATR_PCT = 8.0            # 太高 = 純賭博
 
-# 新聞分析設定
-NEWS_PER_STOCK     = 3     # 每隻股票分析幾條新聞
-DETAIL_THRESHOLD   = 75    # 總分 >= 呢個數字先做第二層詳細分析
-NEWS_CONFIDENCE_MIN = 70   # 信心度低於呢個當中性處理
+# ---------------------------------------------------------------- 倉位與風控
+ACCOUNT_SIZE_HKD = float(os.getenv("ACCOUNT_SIZE_HKD", "100000"))    # 你嘅本金
+RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))   # 每筆最多輸本金 1%
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "3"))       # 同時最多持幾隻
+MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PCT", "30"))        # 單一倉位最多佔本金 30%
+DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "3")) # 當日輸夠 3% 就停手
+
+# ---------------------------------------------------------------- 出場參數（ATR 制）
+ATR_STOP_MULT = float(os.getenv("ATR_STOP_MULT", "1.5"))   # 止蝕 = 入場 − 1.5 × ATR
+ATR_TARGET1_MULT = float(os.getenv("ATR_TARGET1_MULT", "2.0"))  # 第一目標（減半倉）
+ATR_TARGET2_MULT = float(os.getenv("ATR_TARGET2_MULT", "3.0"))  # 第二目標（清倉）
+MIN_RR_RATIO = 1.8          # 風險回報比低過呢個就唔值得入
+MAX_HOLD_DAYS = 10          # 短炒最長持倉日數，到期無表現就走
+BREAKEVEN_ATR = 1.0         # 賺到 1×ATR 之後，止蝕上移到成本價
+TRAIL_ATR_MULT = 1.5        # 移動止蝕：最高價 − 1.5 × ATR
+
+# ---------------------------------------------------------------- 排程（香港時間）
+SCAN_TIMES = os.getenv("SCAN_TIMES", "09:25,10:30,11:30,14:00").split(",")
+MONITOR_INTERVAL_MIN = int(os.getenv("MONITOR_INTERVAL_MIN", "15"))
+CLOSE_REMINDER_TIME = os.getenv("CLOSE_REMINDER_TIME", "15:50")
+
+# ---------------------------------------------------------------- 儲存
+DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "data" / "tylove.db"))
+
+# ---------------------------------------------------------------- 服務
+PORT = int(os.getenv("PORT", "8080"))
+DASH_USER = os.getenv("DASH_USER", "")
+DASH_PASS = os.getenv("DASH_PASS", "")

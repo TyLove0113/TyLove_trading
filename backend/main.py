@@ -196,15 +196,31 @@ def signals_api():
     return jsonify({"signals": recent_signals(60)})
 
 
+_BG_STARTED = False
+
+
 def start_background():
+    """啟動背景排程（只會啟動一次）。
+
+    無論係 `python main.py` 定係 gunicorn 匯入（main:app / dashboard:app），
+    都會自動起排程，唔會出現「網頁開得到但永遠唔掃描」嘅情況。
+    """
+    global _BG_STARTED
+    if _BG_STARTED:
+        return
+    _BG_STARTED = True
     init_db()
-    t = threading.Thread(target=scheduler_loop, daemon=True)
-    t.start()
+    threading.Thread(target=scheduler_loop, daemon=True).start()
     # 開機先做一次掃描，確認設定正確
     threading.Thread(target=lambda: (time.sleep(5), job_scan("啟動掃描")), daemon=True).start()
+    log.info("背景排程已啟動（掃描 %s／每 %d 分鐘監控／%s 收市提醒）",
+             SCAN_TIMES, MONITOR_INTERVAL_MIN, CLOSE_REMINDER_TIME)
+
+
+# 模組被匯入時即刻啟動排程 —— 呢句一定要放喺 if __name__ 之外
+start_background()
 
 
 if __name__ == "__main__":
-    start_background()
     log.info("TyLove 啟動，port %s", PORT)
     app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)

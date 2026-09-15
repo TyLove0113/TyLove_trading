@@ -29,15 +29,15 @@
 
 ```bash
 cd backend
-pip install -r requirements.txt
+py -m pip install -r requirements.txt
 cp .env.example .env      # 填入 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
-python main.py            # 開 http://localhost:8080
+py main.py            # 開 http://localhost:8080
 ```
 
 先跑一次回測，確認參數喺歷史數據上係正期望：
 
 ```bash
-python backtest.py --years 3 --sweep
+py backtest.py --years 3 --sweep
 ```
 
 ---
@@ -149,3 +149,51 @@ backend/
   backtest.py         ★ 回測驗證
   templates/index.html  手機儀表板
 ```
+
+---
+
+## ⚠️ 疑難排解：Railway 崩潰 `ModuleNotFoundError: No module named 'dashboard'`
+
+**原因**：Railway 服務裡面嘅 **Start Command 仍然係舊版 v1 嘅指令**：
+
+```
+gunicorn dashboard:app
+```
+
+v1 嘅 `dashboard.py` 係放 Flask app 嘅檔案，v2 已經合併入 `main.py`，
+所以嗰句舊指令會搵唔到 `dashboard` 而崩潰。
+
+**處理方法（二選一）**
+
+方法 A（推薦，一勞永逸）— 改返做正確指令：
+1. Railway → 你嘅服務 → **Settings** → **Deploy**
+2. 搵 **Custom Start Command**，改成：
+   ```
+   python main.py
+   ```
+   （或者清空佢，就會用返 `Procfile` / `railway.json` 嘅設定）
+3. 順手確認 **Settings → Source → Root Directory** 係 `backend`
+4. 按 **Deploy** 重新部署
+
+方法 B（懶人法）— 直接唔理佢：
+v2 已經加咗 `dashboard.py` 相容層，舊指令都會行得通、唔會再崩潰。
+但長遠建議都係用方法 A，比較乾淨。
+
+**附帶修正**：v2 亦加咗 `gunicorn.conf.py`，將 worker 鎖死做 1 個。
+因為程式喺背景跑緊定時排程，如果開多過一個 worker，
+每個 worker 都會各自掃描一次，你會收到重複幾次嘅 Telegram 通知。
+
+
+
+## ⚠️ 一定要做：Railway Volume（否則資料會清空）
+
+預設情況下 Railway 每次重新部署都會清空容器，SQLite 資料庫入面嘅
+**持倉紀錄、交易成績、你喺網頁改嘅風控參數**會全部消失。
+
+1. Railway → 你嘅服務 → **Settings** → **Volumes** → **Add Volume**
+2. Mount path 填 `/data`
+3. 去 **Variables** 加一個：`DB_PATH` = `/data/tylove.db`
+4. 按 **Redeploy**
+
+之後每次更新程式，持倉同設定都會保留。
+開機時如果偵測到資料庫唔喺持久化位置，Log 會出警告提醒你。

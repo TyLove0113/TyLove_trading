@@ -14,6 +14,7 @@ from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
 import scanner
+import settings_store
 from config import (CLOSE_REMINDER_TIME, DASH_PASS, DASH_USER, HK_TZ,
                     MONITOR_INTERVAL_MIN, PORT, SCAN_TIMES, WATCHLIST)
 from positions import init_db, list_closed, list_open, realised_stats, recent_signals
@@ -165,19 +166,66 @@ def manual_monitor():
     return jsonify({"ok": True, "positions": recs})
 
 
+@app.route("/api/settings", methods=["GET", "POST"])
+def settings_api():
+    """風控參數：網頁讀取／修改，改完即時生效。"""
+    if request.method == "POST":
+        payload = request.get_json(force=True) or {}
+        try:
+            settings_store.save(payload)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:  # noqa: BLE001
+            log.exception("儲存風控參數失敗")
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": True, **settings_store.describe()})
+    return jsonify(settings_store.describe())
+
+
 @app.route("/api/positions", methods=["GET", "POST"])
 def positions_api():
     from positions import close_position, open_position
     if request.method == "POST":
         d = request.get_json(force=True) or {}
         try:
-            pid = open_position(
-                d["symbol"].upper(), d.get("name", d["symbol"].upper()),
-                float(d["entry_price"]), float(d["qty"]), float(d["stop_loss"]),
-                d.get("target1"), d.get("target2"), d.get("atr"), d.get("note", ""),
-            )
-            return jsonify({"ok": True, "id": pid})
+            symbol = str(d["symbol"]).upper().strip()
+            entry = float(d["entry_price"])
+            qty = float(d["qty"])
+            name = d.get("name") or symbol
+            stop = float(d["stop_loss"]) if d.get("stop_loss") else None
+            t1 = float(d["target1"]) if d.get("target1") else None
+            t2 = float(d["target2"]) if d.get("target2") else None
+            atr = None
+
+            # 冇填止蝕／目標 → 自動用 ATR 幫你計（你只需要知自己幾錢入、買幾多股）
+            if stop is None or t1 is None or t2 is None:
+                try:
+                    import data_fetcher as df_mod
+                    import indicators
+                    import trade_plan
+                    daily = df_mod.fetch_daily(symbol)
+                    if len(daily) >= 60:
+                        snap = indicators.latest_snapshot(indicators.compute(daily))
+                        atr = snap.get("atr")
+                        if atr:
+                            plan = trade_plan.build_plan(symbol, name, entry, atr, 100)
+                            if plan.get("valid") is not False:
+                                stop = stop if stop is not None else plan["stop_loss"]
+                                t1 = t1 if t1 is not None else plan["target1"]
+                                t2 = t2 if t2 is not None else plan["target2"]
+                except Exception:  # noqa: BLE001
+                    log.exception("自動計止蝕止賺失敗，改用你填嘅值")
+            if stop is None:
+                return jsonify({"ok": False, "error": "無法自動計算止蝕，請自己填止蝕價"}), 400
+
+            pid = open_position(symbol, name, entry, qty, stop, t1, t2, atr, d.get("note", ""))
+            log.info("新增持倉 #%s %s 入場 %.3f × %s 股，止蝕 %.3f", pid, symbol, entry, qty, stop)
+            return jsonify({"ok": True, "id": pid, "stop_loss": stop,
+                            "target1": t1, "target2": t2, "auto": atr is not None})
+        except KeyError as exc:
+            return jsonify({"ok": False, "error": f"缺少欄位 {exc}"}), 400
         except Exception as exc:  # noqa: BLE001
+            log.exception("新增持倉失敗")
             return jsonify({"ok": False, "error": str(exc)}), 400
 
     return jsonify({"open": list_open(), "closed": list_closed(30), "stats": realised_stats()})
@@ -199,6 +247,24 @@ def signals_api():
 _BG_STARTED = False
 
 
+def _warn_if_not_persistent() -> None:
+    """檢查資料庫係咪喺持久化嘅位置。
+
+    呢個係最易蝕錢嘅技術問題：如果 DB 唔喺 Volume 上面，
+    Railway 每次重新部署都會清空你所有持倉同交易紀錄。
+    """
+    import config as _cfg
+    path = str(_cfg.DB_PATH)
+    if path.startswith("/data") or os.getenv("DB_PERSIST_OK") == "1":
+        log.info("資料庫位置：%s（持久化正常）", path)
+        return
+    log.warning(
+        "⚠️  資料庫位置 = %s —— 唔喺 Railway Volume 掛載點上面，"
+        "每次重新部署都會清空持倉同交易紀錄！"
+        "解決方法：Railway → 服務 → Settings → Volumes 掛一個 volume 去 /data，"
+        "再喺 Variables 加 DB_PATH=/data/tylove.db。", path)
+
+
 def start_background():
     """啟動背景排程（只會啟動一次）。
 
@@ -210,6 +276,7 @@ def start_background():
         return
     _BG_STARTED = True
     init_db()
+    _warn_if_not_persistent()
     threading.Thread(target=scheduler_loop, daemon=True).start()
     # 開機先做一次掃描，確認設定正確
     threading.Thread(target=lambda: (time.sleep(5), job_scan("啟動掃描")), daemon=True).start()

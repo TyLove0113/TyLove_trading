@@ -1,26 +1,40 @@
 """
-通知模組 — Telegram 推送（用純 HTTP，唔用 asyncio）
-原版問題：每次 send_message 都 asyncio.run()，同 schedule 同步庫混用會爆。
-新版：直接 call Bot API，同步、可靠、零 event loop。
-亦加入「唔設憑證時自動降級成 console 輸出」，方便本地測試。
+通知模組 — Telegram 推送（純 HTTP，唔用 asyncio）
+
+支援兩個獨立 bot：
+  · channel="hk"   → 港股分析（TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID）
+  · channel="gold" → 黃金分析（TELEGRAM_GOLD_BOT_TOKEN / TELEGRAM_GOLD_CHAT_ID）
+
+兩個 bot 唔填就得，程式會自動降級成 console 輸出，方便本地測試。
 """
 import logging
 
 import requests
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-
 log = logging.getLogger("tylove.notify")
 _API = "https://api.telegram.org/bot{token}/sendMessage"
 
+# channel -> (token 設定名, chat_id 設定名)
+CHANNEL_KEYS = {
+    "hk": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
+    "gold": ("TELEGRAM_GOLD_BOT_TOKEN", "TELEGRAM_GOLD_CHAT_ID"),
+}
 
-def _send(text: str, chat_id: str) -> bool:
-    if not TELEGRAM_BOT_TOKEN:
+
+def _creds(channel: str):
+    """每次都重新讀 config，咁就唔會被 import 時嘅舊值鎖死。"""
+    import config
+    tok_name, chat_name = CHANNEL_KEYS.get(channel, CHANNEL_KEYS["hk"])
+    return (getattr(config, tok_name, "") or "").strip(), (getattr(config, chat_name, "") or "").strip()
+
+
+def _send(text: str, chat_id: str, token: str) -> bool:
+    if not token:
         log.info("[通知-未設定Telegram]\n%s", text)
         return False
     try:
         resp = requests.post(
-            _API.format(token=TELEGRAM_BOT_TOKEN),
+            _API.format(token=token),
             json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown",
                   "disable_web_page_preview": True},
             timeout=15,
@@ -28,7 +42,7 @@ def _send(text: str, chat_id: str) -> bool:
         if resp.status_code != 200:
             # Markdown 解析失敗時退回純文字，確保你一定收得到
             resp = requests.post(
-                _API.format(token=TELEGRAM_BOT_TOKEN),
+                _API.format(token=token),
                 json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
                 timeout=15,
             )
@@ -41,10 +55,14 @@ def _send(text: str, chat_id: str) -> bool:
         return False
 
 
-def push(text: str) -> bool:
-    """發到預設 chat。長訊息自動分段（Telegram 上限 4096 字）。"""
-    if not TELEGRAM_CHAT_ID:
-        log.info("[通知-無chat_id]\n%s", text)
+def push(text: str, channel: str = "hk") -> bool:
+    """發到指定 channel。長訊息自動分段（Telegram 上限 4096 字）。"""
+    token, chat_id = _creds(channel)
+    if not chat_id:
+        log.info("[通知-%s-無chat_id]\n%s", channel, text)
+        return False
+    if not token:
+        log.info("[通知-%s-無token]\n%s", channel, text)
         return False
     parts, chunk = [], text
     while len(chunk) > 3800:
@@ -53,10 +71,10 @@ def push(text: str) -> bool:
         parts.append(chunk[:cut])
         chunk = chunk[cut:]
     parts.append(chunk)
-    return all(_send(p, TELEGRAM_CHAT_ID) for p in parts)
+    return all(_send(p, chat_id, token) for p in parts)
 
 
-# ------------------------------------------------------------------ 格式化
+# ------------------------------------------------------------------ 格式化：港股
 def fmt_scan_header(scan_type: str, scanned: int, passed: int) -> str:
     return f"*【TyLove 掃描】{scan_type}*\n檢查 {scanned} 隻，{passed} 隻有訊號\n" + "─" * 18
 
@@ -99,7 +117,7 @@ def fmt_position(item: dict) -> str:
     return "\n".join(lines)
 
 
-def fmt_close_reminder(items: list[dict], allow_new: dict) -> str:
+def fmt_close_reminder(items: list, allow_new: dict) -> str:
     head = "*【收市前提醒】* 仲有 10 分鐘收市"
     if not items:
         return head + "\n手上無持倉。今日操作完結，聽日再戰。"
@@ -117,3 +135,34 @@ def fmt_close_reminder(items: list[dict], allow_new: dict) -> str:
 
 def fmt_error(where: str, err: str) -> str:
     return f"⚠️ *TyLove 出錯*\n位置：{where}\n{err[:300]}"
+
+
+# ------------------------------------------------------------------ 格式化：黃金
+def fmt_gold_signal(g: dict) -> str:
+    """黃金訊號通知。"""
+    if not g.get("has_signal"):
+        return ("*【黃金 XAU/USD】暫無訊號*\n"
+                f"現價 {g['price']}（{g['time']}）\n"
+                f"狀態：{g.get('state','')}\n"
+                f"{'／'.join(g.get('reasons', [])[:3])}")
+
+    arrow = "🟢 做多" if g["direction"] == "long" else "🔴 做空"
+    lines = [
+        f"*【黃金 XAU/USD】{arrow}*",
+        f"時間 {g['time']}　現價 {g['price']}",
+        "─" * 18,
+        f"入場 *{g['entry']}*",
+        f"止蝕 *{g['stop']}*（距離 {g['stop_dist']} 美元）",
+        f"目標 *{g['target']}*（距離 {g['target_dist']} 美元）",
+        f"風險回報比 1 : {g['rr']}",
+        "─" * 18,
+        f"建議手數 *{g['lot']} 手*（= {g['oz']} 盎司）",
+        f"如果用 0.01 手：最大虧損 *US${g['risk_usd']:.2f}*",
+        f"ATR(14) = {g['atr']}（{g['atr_pct']}% of 價格）",
+        "",
+        "理由：" + "；".join(g.get("reasons", [])[:3]),
+        "",
+        f"⚠️ {g.get('disclaimer','')}",
+        "─ 落單由你本人喺 MT4 執行，記住填 S/L ─",
+    ]
+    return "\n".join(lines)

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>TyLove · 黃金 XAU/USD</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body{background:#0B1120;color:#E2E8F0}
+  .card{background:#131C31;border:1px solid #1E2A44;border-radius:14px}
+  .pos{color:#34D399}.neg{color:#F87171}
+  .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px}
+</style>
+</head>
+<body class="p-4 md:p-8 max-w-5xl mx-auto">
+
+<div class="flex items-center justify-between mb-5 flex-wrap gap-3">
+  <div>
+    <h1 class="text-xl font-semibold">🥇 黃金 XAU/USD 日內分析</h1>
+    <div class="text-xs text-slate-500 mt-1">數據源 <span id="sym">GC=F</span>（COMEX 黃金期貨）· 策略 Donchian 20 突破</div>
+  </div>
+  <div class="flex gap-2">
+    <a href="/" class="text-sm px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600">🇭🇰 港股</a>
+    <button onclick="refresh()" class="text-sm px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500">重新分析</button>
+    <button onclick="pushNow()" class="text-sm px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500">推送一次</button>
+  </div>
+</div>
+
+<!-- 誠實聲明（唔可以刪） -->
+<div class="card p-4 mb-5" style="border-color:#7F1D1D;background:#2A1215">
+  <div class="text-sm font-semibold text-red-300 mb-1">⚠️ 先睇呢段，再睇下面嘅訊號</div>
+  <div class="text-xs text-red-200/90 leading-relaxed">
+    呢組策略參數喺 <b>60 日樣本</b>表現幾好（利潤因子 2.17），但放到
+    <b>兩年樣本外測試就跌到 0.90 —— 即係蝕錢</b>。換句話講，呢個策略
+    <b>未證實有穩定優勢</b>。所以本頁只作<b>練習同記錄</b>用途，
+    唔應該當佢係賺錢保證，更唔應該因為佢出咗訊號就加大注碼。
+  </div>
+</div>
+
+<!-- 即時狀態 -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+  <div class="card p-4"><div class="text-xs text-slate-400">現價</div>
+    <div id="price" class="text-2xl font-semibold mt-1">—</div>
+    <div id="ts" class="text-xs text-slate-500 mt-1">—</div></div>
+  <div class="card p-4"><div class="text-xs text-slate-400">ATR(14)</div>
+    <div id="atr" class="text-2xl font-semibold mt-1">—</div>
+    <div id="atrp" class="text-xs text-slate-500 mt-1">—</div></div>
+  <div class="card p-4"><div class="text-xs text-slate-400">今日訊號</div>
+    <div id="cnt" class="text-2xl font-semibold mt-1">—</div>
+    <div id="sess" class="text-xs text-slate-500 mt-1">—</div></div>
+  <div class="card p-4"><div class="text-xs text-slate-400">點差設定</div>
+    <div id="spr" class="text-2xl font-semibold mt-1">—</div>
+    <div class="text-xs text-slate-500 mt-1">美元／盎司</div></div>
+</div>
+
+<!-- 訊號 -->
+<div id="signal" class="mb-5"></div>
+
+<!-- 記錄方法說明 -->
+<div class="card p-4 mb-5">
+  <div class="text-sm font-semibold mb-2">📝 點樣記錄你嘅黃金交易</div>
+  <div class="text-xs text-slate-400 leading-relaxed">
+    喺 MT4 落完單之後，去「🇭🇰 港股」頁嘅 <b>💼 持倉管理</b> 新增一筆，
+    代號填 <code class="text-sky-300">XAUUSD</code>，<b>股數一欄填「盎司數」</b>：
+    <br>· 0.01 手 = <b>1 盎司</b>　· 0.02 手 = <b>2 盎司</b>　· 0.05 手 = <b>5 盎司</b>
+    <br>咁樣程式計出嚟嘅「賺蝕金額」就會等於你嘅美元盈虧（網頁寫 HK$，你當 US$ 睇）。
+  </div>
+</div>
+
+<!-- 歷史訊號 -->
+<div class="card p-4 mb-5">
+  <div class="text-sm font-semibold mb-3">📜 最近訊號紀錄</div>
+  <div id="history" class="text-xs text-slate-400">載入中…</div>
+</div>
+
+<div class="card p-4 mb-8">
+  <div class="text-sm font-semibold mb-2">🤖 Telegram 測試</div>
+  <div class="text-xs text-slate-400 mb-3">確認黃金專用 bot 通唔通（會發一條測試訊息）。</div>
+  <button onclick="testTg()" class="text-sm px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">測試黃金 bot</button>
+  <span id="tgMsg" class="text-xs ml-3"></span>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function refresh(){
+  try{
+    const r = await fetch('/api/gold');
+    const d = await r.json();
+    if(!d.ok){
+      $('signal').innerHTML = `<div class="card p-4" style="border-color:#7F1D1D">
+        <div class="text-sm text-red-300">分析失敗：${d.error||'未知錯誤'}</div></div>`;
+      return;
+    }
+    $('sym').textContent = d.data_symbol;
+    $('price').textContent = d.price;
+    $('ts').textContent = d.time;
+    $('atr').textContent = d.atr;
+    $('atrp').textContent = d.atr_pct + '% of 價格';
+    $('cnt').textContent = d.today_trades + ' / ' + d.max_trades;
+    $('sess').textContent = d.session_ok ? '✅ 活躍時段' : '⏸ 非活躍時段';
+    $('spr').textContent = d.spread;
+    renderSignal(d);
+    renderHistory(d.signals||[]);
+  }catch(e){
+    $('signal').innerHTML = `<div class="card p-4"><div class="text-sm text-red-300">載入失敗：${e}</div></div>`;
+  }
+}
+
+function renderSignal(d){
+  const reasons = (d.reasons||[]).map(x=>`<li>${x}</li>`).join('');
+  if(!d.has_signal){
+    $('signal').innerHTML = `<div class="card p-5">
+      <div class="text-sm text-slate-300 font-semibold mb-2">⏸ 目前未觸發入場條件</div>
+      <div class="text-xs text-slate-400 mb-3">${d.state||''}</div>
+      <ul class="text-xs text-slate-400 list-disc pl-5 space-y-1">${reasons}</ul>
+    </div>`;
+    return;
+  }
+  const long = d.direction === 'long';
+  $('signal').innerHTML = `<div class="card p-5" style="border-color:${long?'#065F46':'#7F1D1D'}">
+    <div class="flex items-center justify-between flex-wrap gap-2 mb-4">
+      <div class="text-lg font-semibold ${long?'pos':'neg'}">${long?'🟢 做多（買升）':'🔴 做空（買跌）'}</div>
+      <div class="text-xs text-slate-400">${d.time}</div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div><div class="text-xs text-slate-400">入場</div><div class="text-xl font-semibold">${d.entry}</div></div>
+      <div><div class="text-xs text-slate-400">止蝕（必填）</div><div class="text-xl font-semibold neg">${d.stop}</div>
+        <div class="text-xs text-slate-500">距離 ${d.stop_dist}</div></div>
+      <div><div class="text-xs text-slate-400">目標</div><div class="text-xl font-semibold pos">${d.target}</div>
+        <div class="text-xs text-slate-500">距離 ${d.target_dist}</div></div>
+      <div><div class="text-xs text-slate-400">風險回報比</div><div class="text-xl font-semibold">1 : ${d.rr}</div></div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+      <div><div class="text-xs text-slate-400">建議手數</div><div class="text-lg font-semibold">${d.lot} 手</div>
+        <div class="text-xs text-slate-500">= ${d.oz} 盎司</div></div>
+      <div><div class="text-xs text-slate-400">若用 0.01 手</div><div class="text-lg font-semibold">最大虧損 US$${d.risk_usd}</div>
+        <div class="text-xs text-slate-500">已計點差</div></div>
+      <div><div class="text-xs text-slate-400">你嘅手數範圍</div><div class="text-lg font-semibold">${d.lot_min} – ${d.lot_max} 手</div></div>
+    </div>
+    <div class="text-xs text-slate-400 mb-1 font-semibold">判斷理由</div>
+    <ul class="text-xs text-slate-400 list-disc pl-5 space-y-1">${reasons}</ul>
+    <div class="text-xs text-slate-500 mt-4 pt-3" style="border-top:1px solid #1E2A44">
+      落單由你本人喺 MT4 執行。<b class="text-red-300">記住一定要填 S/L</b>（你上次兩筆都冇設止蝕）。
+    </div>
+  </div>`;
+}
+
+function renderHistory(list){
+  if(!list.length){ $('history').textContent = '暫時未有訊號紀錄。'; return; }
+  $('history').innerHTML = list.map(s=>{
+    const long = s.direction === 'long';
+    return `<div class="flex flex-wrap gap-x-4 gap-y-1 py-2" style="border-bottom:1px solid #1E2A44">
+      <span class="text-slate-400 w-32">${(s.ts||'').slice(0,16)}</span>
+      <span class="${long?'pos':'neg'} w-14">${long?'做多':'做空'}</span>
+      <span class="w-24">入 ${s.entry}</span>
+      <span class="neg w-24">蝕 ${s.stop}</span>
+      <span class="pos w-24">標 ${s.target}</span>
+      <span class="w-20">${s.lot} 手</span>
+      <span class="text-slate-500">US$${s.risk_usd}</span>
+    </div>`;
+  }).join('');
+}
+
+async function pushNow(){
+  const r = await fetch('/api/gold/scan',{method:'POST'});
+  const d = await r.json();
+  if(d.ok){
+    const res = d.result||{};
+    alert(res.has_signal ? '✅ 有訊號，已推送 Telegram' : '⏸ 目前無訊號（已重新分析）');
+    refresh();
+  } else { alert('❌ 失敗：' + (d.error||d.result?.error||'未知')); }
+}
+
+async function testTg(){
+  $('tgMsg').textContent = '傳送中…';
+  const r = await fetch('/api/gold/test-telegram',{method:'POST'});
+  const d = await r.json();
+  $('tgMsg').className = 'text-xs ml-3 ' + (d.ok?'text-emerald-300':'text-rose-300');
+  $('tgMsg').textContent = d.ok ? '✅ 已發送，去 Telegram 睇睇' : '❌ ' + (d.error||'失敗');
+}
+
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>

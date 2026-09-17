@@ -9,10 +9,12 @@ import threading
 import time
 from datetime import datetime
 
-import schedule
+import schedule  # 已停用，改用自己計香港時間（見 scheduler_loop）
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
+import config
+import gold
 import scanner
 import settings_store
 from config import (CLOSE_REMINDER_TIME, DASH_PASS, DASH_USER, HK_TZ,
@@ -78,6 +80,16 @@ def job_open_scan():
     job_scan("開市前掃描")
 
 
+def job_gold_scan():
+    """黃金 XAU/USD 分析（獨立於港股，用另一個 Telegram bot）。"""
+    if not config.GOLD_ENABLED:
+        return
+    try:
+        gold.scan(push=True)
+    except Exception:  # noqa: BLE001
+        log.exception("黃金掃描失敗")
+
+
 def job_close_reminder():
     try:
         scanner.closing_reminder()
@@ -85,25 +97,51 @@ def job_close_reminder():
         log.exception("收市提醒失敗")
 
 
-def setup_schedule():
-    for t in SCAN_TIMES:
-        t = t.strip()
-        if t:
-            schedule.every().day.at(t).do(job_open_scan)
-    schedule.every(MONITOR_INTERVAL_MIN).minutes.do(job_monitor)
-    schedule.every().day.at(CLOSE_REMINDER_TIME).do(job_close_reminder)
-    log.info("排程設定完成：掃描 %s／每 %d 分鐘監控／%s 收市提醒",
-             SCAN_TIMES, MONITOR_INTERVAL_MIN, CLOSE_REMINDER_TIME)
+def _schedule_targets() -> list:
+    """今日所有要觸發嘅時間點（香港時間 HH:MM）。"""
+    out = [t.strip() for t in SCAN_TIMES if t.strip()]
+    out.append(CLOSE_REMINDER_TIME.strip())
+    return out
 
 
 def scheduler_loop():
-    setup_schedule()
+    """背景排程 —— 一律用香港時間判斷，唔受容器時區影響。
+
+    ⚠️ 舊版用 `schedule` 套件，佢跟容器嘅本地時間，
+    而 Railway 容器係 UTC，所以「09:25」實際會喺香港時間 17:25 才跑。
+    呢個版本自己計香港時間，喺任何主機都準。
+    """
+    log.info("⏰ 排程啟動｜掃描時段 %s（香港時間）｜每 %d 分鐘監控持倉｜%s 收市提醒",
+             SCAN_TIMES, MONITOR_INTERVAL_MIN, CLOSE_REMINDER_TIME)
+    log.info("⏰ 而家香港時間：%s（容器時間：%s）",
+             now_hk().strftime("%Y-%m-%d %H:%M:%S"), datetime.now().strftime("%H:%M:%S"))
+    last_day = None
+    fired = set()
+    last_monitor = 0.0
+
     while True:
         try:
-            schedule.run_pending()
+            t = now_hk()
+            day = t.strftime("%Y-%m-%d")
+            if day != last_day:
+                last_day, fired = day, set()
+                log.info("📅 新一日：%s（香港時間）", day)
+
+            hhmm = t.strftime("%H:%M")
+            if hhmm in _schedule_targets() and hhmm not in fired:
+                fired.add(hhmm)
+                if hhmm == CLOSE_REMINDER_TIME.strip():
+                    threading.Thread(target=job_close_reminder, daemon=True).start()
+                else:
+                    threading.Thread(target=job_open_scan, daemon=True).start()
+                    threading.Thread(target=job_gold_scan, daemon=True).start()
+
+            if time.time() - last_monitor >= MONITOR_INTERVAL_MIN * 60:
+                last_monitor = time.time()
+                threading.Thread(target=job_monitor, daemon=True).start()
         except Exception:  # noqa: BLE001
             log.exception("排程執行出錯")
-        time.sleep(20)
+        time.sleep(15)
 
 
 # ------------------------------------------------------------------ 認證
@@ -164,6 +202,42 @@ def manual_monitor():
     with _LOCK:
         _STATE["last_positions"] = recs
     return jsonify({"ok": True, "positions": recs})
+
+
+# ------------------------------------------------------------------ 黃金分頁
+@app.route("/gold")
+def gold_page():
+    return render_template("gold.html")
+
+
+@app.route("/api/gold")
+def gold_state():
+    """目前黃金狀態。呢個 endpoint 唔會推送 Telegram。"""
+    try:
+        g = gold.evaluate()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("黃金分析失敗")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    g["signals"] = gold.recent(20)
+    return jsonify(g)
+
+
+@app.route("/api/gold/scan", methods=["POST"])
+def gold_manual_scan():
+    g = gold.scan(push=True)
+    return jsonify({"ok": bool(g.get("ok")), "result": g})
+
+
+@app.route("/api/gold/test-telegram", methods=["POST"])
+def gold_test_telegram():
+    """測試黃金專用 bot 通唔通。"""
+    import notifier
+    token, chat = notifier._creds("gold")
+    if not token or not chat:
+        return jsonify({"ok": False,
+                        "error": "未設定 TELEGRAM_GOLD_BOT_TOKEN 或 TELEGRAM_GOLD_CHAT_ID"})
+    ok = notifier.push("✅ 黃金分析 bot 連線成功（TyLove）。\n呢個係測試訊息。", channel="gold")
+    return jsonify({"ok": ok, "error": None if ok else "發送失敗，檢查 token / chat_id"})
 
 
 @app.route("/api/settings", methods=["GET", "POST"])

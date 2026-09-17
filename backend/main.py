@@ -229,26 +229,20 @@ def gold_manual_scan():
 
 @app.route("/api/gold/test-telegram", methods=["POST"])
 def gold_test_telegram():
-    """測試黃金專用 bot 通唔通。"""
+    """測試黃金 bot：直接問 Telegram，回報每一步實測結果。"""
     import notifier
-    token, chat = notifier._creds("gold")
-    missing = []
-    if not token:
-        missing.append("TELEGRAM_GOLD_BOT_TOKEN")
-    if not chat:
-        missing.append("TELEGRAM_GOLD_CHAT_ID")
-    if missing:
-        return jsonify({
-            "ok": False,
-            "token_set": bool(token),
-            "chat_set": bool(chat),
-            "chat_masked": (chat[:4] + "…" + chat[-3:]) if len(chat) > 8 else ("(空白)" if not chat else chat),
-            "error": "Railway 讀唔到：" + "、".join(missing) +
-                     "。檢查：①Variables 名稱要完全一致 ②加完要 Redeploy ③Chat ID 係數字"
-                     "（例如 524897657），唔係 bot token 開頭嗰串。",
-        })
-    ok = notifier.push("✅ 黃金分析 bot 連線成功（TyLove）。\n呢個係測試訊息。", channel="gold")
-    return jsonify({"ok": ok, "error": None if ok else "發送失敗，檢查 token / chat_id"})
+    d = notifier.diagnose("gold")
+    d["error"] = None if d.get("ok") else d.get("verdict")
+    return jsonify(d)
+
+
+@app.route("/api/hk/test-telegram", methods=["POST"])
+def hk_test_telegram():
+    """測試港股 bot（同一套診斷）。"""
+    import notifier
+    d = notifier.diagnose("hk")
+    d["error"] = None if d.get("ok") else d.get("verdict")
+    return jsonify(d)
 
 
 @app.route("/api/settings", methods=["GET", "POST"])

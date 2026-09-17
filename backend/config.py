@@ -100,8 +100,11 @@ GOLD_SCAN_TIMES = os.getenv(
 ).split(",")
 
 # 黃金專用 Telegram bot（唔填就唔會推送，但網頁照睇得到）
-GOLD_TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_GOLD_BOT_TOKEN", "").strip()
-GOLD_TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_GOLD_CHAT_ID", "").strip()
+# 兩種寫法都接受（TELEGRAM_GOLD_* 同 GOLD_TELEGRAM_*），唔想再因為名唔對而收唔到通知
+GOLD_TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_GOLD_BOT_TOKEN")
+                           or os.getenv("GOLD_TELEGRAM_BOT_TOKEN") or "").strip()
+GOLD_TELEGRAM_CHAT_ID = (os.getenv("TELEGRAM_GOLD_CHAT_ID")
+                         or os.getenv("GOLD_TELEGRAM_CHAT_ID") or "").strip()
 
 # ---------------------------------------------------------------- 儲存
 DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "data" / "tylove.db"))

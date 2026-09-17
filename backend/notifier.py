@@ -17,15 +17,40 @@ _API = "https://api.telegram.org/bot{token}/sendMessage"
 # channel -> (token 設定名, chat_id 設定名)
 CHANNEL_KEYS = {
     "hk": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"),
-    "gold": ("TELEGRAM_GOLD_BOT_TOKEN", "TELEGRAM_GOLD_CHAT_ID"),
+    "gold": ("GOLD_TELEGRAM_BOT_TOKEN", "GOLD_TELEGRAM_CHAT_ID"),
+}
+
+# ⚠️ 歷史陷阱：config 用 GOLD_TELEGRAM_*，但有人會寫 TELEGRAM_GOLD_*。
+# 兩個名都試，先 config（可被網頁覆蓋）再 os.environ。
+_ALIASES = {
+    "TELEGRAM_BOT_TOKEN": ("TELEGRAM_BOT_TOKEN",),
+    "TELEGRAM_CHAT_ID": ("TELEGRAM_CHAT_ID",),
+    "GOLD_TELEGRAM_BOT_TOKEN": ("GOLD_TELEGRAM_BOT_TOKEN", "TELEGRAM_GOLD_BOT_TOKEN"),
+    "GOLD_TELEGRAM_CHAT_ID": ("GOLD_TELEGRAM_CHAT_ID", "TELEGRAM_GOLD_CHAT_ID"),
 }
 
 
-def _creds(channel: str):
-    """每次都重新讀 config，咁就唔會被 import 時嘅舊值鎖死。"""
+def _lookup(name: str) -> str:
+    """搵一個設定值：config → 環境變數 → 別名。搵唔到回傳空字串。"""
+    import os
+
     import config
+    keys = _ALIASES.get(name, (name,))
+    for key in keys:
+        val = getattr(config, key, None)
+        if val:
+            return str(val).strip()
+    for key in keys:
+        val = os.environ.get(key)
+        if val:
+            return str(val).strip()
+    return ""
+
+
+def _creds(channel: str):
+    """每次都重新讀，咁就唔會被 import 時嘅舊值鎖死。"""
     tok_name, chat_name = CHANNEL_KEYS.get(channel, CHANNEL_KEYS["hk"])
-    return (getattr(config, tok_name, "") or "").strip(), (getattr(config, chat_name, "") or "").strip()
+    return _lookup(tok_name), _lookup(chat_name)
 
 
 def _send(text: str, chat_id: str, token: str) -> bool:
@@ -53,6 +78,94 @@ def _send(text: str, chat_id: str, token: str) -> bool:
     except Exception as exc:  # noqa: BLE001
         log.warning("Telegram 發送異常: %s", exc)
         return False
+
+
+# ------------------------------------------------------------------ 診斷
+def diagnose(channel: str = "gold", send_test: bool = True) -> dict:
+    """直接問 Telegram 發生咩事，唔靠猜。
+
+    回傳 {ok, verdict, steps:[{step, ok, detail}]}，每一步都係實測結果。
+    """
+    token, chat = _creds(channel)
+    out = {
+        "channel": channel,
+        "token_set": bool(token),
+        "chat_set": bool(chat),
+        "token_masked": (token[:12] + "…") if token else "(空白)",
+        "chat_masked": (chat[:4] + "…" + chat[-3:]) if len(chat) > 8 else (chat or "(空白)"),
+        "steps": [],
+    }
+
+    if not token:
+        out["ok"] = False
+        out["verdict"] = f"讀唔到 bot token（channel={channel}）。檢查 Railway Variables 名稱。"
+        return out
+    if not chat:
+        out["ok"] = False
+        out["verdict"] = f"讀唔到 chat id（channel={channel}）。檢查 Railway Variables 名稱。"
+        return out
+    if ":" not in token:
+        out["ok"] = False
+        out["verdict"] = "Bot token 格式唔對：應該係「數字:英數字」，中間有個冒號。"
+        return out
+
+    # ① token 有冇效
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=15).json()
+        uname = ((r.get("result") or {}).get("username") or "")
+        out["steps"].append({
+            "step": "① 檢查 bot token",
+            "ok": bool(r.get("ok")),
+            "detail": f"@{uname}" if r.get("ok") else (r.get("description") or "未知錯誤"),
+        })
+        if not r.get("ok"):
+            out["ok"] = False
+            out["verdict"] = "Bot token 唔正確（Telegram 拒絕）。去 BotFather 確認。"
+            return out
+    except Exception as exc:  # noqa: BLE001
+        out["ok"] = False
+        out["steps"].append({"step": "① 檢查 bot token", "ok": False, "detail": str(exc)})
+        out["verdict"] = "連唔到 Telegram（網絡問題）。"
+        return out
+
+    if not send_test:
+        out["ok"] = True
+        out["verdict"] = "Token 有效。"
+        return out
+
+    # ② 真正發一條訊息
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat, "text": "✅ 黃金分析 bot 連線成功（TyLove）"},
+            timeout=15,
+        ).json()
+        ok = bool(r.get("ok"))
+        out["steps"].append({
+            "step": "② 發送測試訊息",
+            "ok": ok,
+            "detail": "已發送，去 Telegram 睇下" if ok else (r.get("description") or "未知錯誤"),
+        })
+        if ok:
+            out["ok"] = True
+            out["verdict"] = "成功！訊息已送到你 Telegram。"
+        else:
+            desc = str(r.get("description") or "")
+            out["ok"] = False
+            if "chat not found" in desc:
+                out["verdict"] = ("Chat ID 唔正確（Telegram 話 chat not found）。"
+                                  "Chat ID 係你自己嘅用戶 ID，例如 524897657，唔係 bot token 開頭嗰串。")
+            elif "blocked" in desc:
+                out["verdict"] = "你封鎖咗個 bot。喺 Telegram 解除封鎖，或者重新撳 Start。"
+            elif "not enough rights" in desc:
+                out["verdict"] = "個 bot 冇權發訊息俾你。去 Telegram 搵佢撳 Start。"
+            else:
+                out["verdict"] = f"Telegram 拒絕：{desc}"
+    except Exception as exc:  # noqa: BLE001
+        out["ok"] = False
+        out["steps"].append({"step": "② 發送測試訊息", "ok": False, "detail": str(exc)})
+        out["verdict"] = "發送時出錯。"
+    return out
 
 
 def push(text: str, channel: str = "hk") -> bool:

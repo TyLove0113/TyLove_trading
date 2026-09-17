@@ -91,9 +91,10 @@
 
 <div class="card p-4 mb-8">
   <div class="text-sm font-semibold mb-2">🤖 Telegram 測試</div>
-  <div class="text-xs text-slate-400 mb-3">確認黃金專用 bot 通唔通（會發一條測試訊息）。</div>
+  <div class="text-xs text-slate-400 mb-3">確認黃金專用 bot 通唔通（會發一條測試訊息）。失敗時會逐步話你知邊度出問題。</div>
   <button onclick="testTg()" class="text-sm px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">測試黃金 bot</button>
   <span id="tgMsg" class="text-xs ml-3"></span>
+  <div id="tgDiag"></div>
 </div>
 
 <script>
@@ -189,11 +190,27 @@ async function pushNow(){
 }
 
 async function testTg(){
-  $('tgMsg').textContent = '傳送中…';
-  const r = await fetch('/api/gold/test-telegram',{method:'POST'});
-  const d = await r.json();
-  $('tgMsg').className = 'text-xs ml-3 ' + (d.ok?'text-emerald-300':'text-rose-300');
-  $('tgMsg').textContent = d.ok ? '✅ 已發送，去 Telegram 睇睇' : '❌ ' + (d.error||'失敗');
+  $('tgMsg').textContent = '檢查中…';
+  $('tgDiag').innerHTML = '';
+  try{
+    const r = await fetch('/api/gold/test-telegram',{method:'POST'});
+    const d = await r.json();
+    $('tgMsg').className = 'text-xs ml-3 ' + (d.ok?'text-emerald-300':'text-rose-300');
+    $('tgMsg').textContent = d.ok ? '✅ 成功' : '❌ 失敗';
+    const rows = [
+      ['Bot Token', d.token_set ? d.token_masked : '讀唔到（空白）', !!d.token_set],
+      ['Chat ID',   d.chat_set  ? d.chat_masked  : '讀唔到（空白）', !!d.chat_set]
+    ].concat((d.steps||[]).map(s=>[s.step, s.detail, s.ok]));
+    $('tgDiag').innerHTML =
+      '<div class="mt-3 text-xs space-y-1">' + rows.map(([k,v,ok])=>
+        '<div class="flex gap-2"><span class="w-4 shrink-0 '+(ok?'text-emerald-400':'text-rose-400')+'">'+(ok?'✓':'✗')+'</span>'+
+        '<span class="text-slate-400 shrink-0">'+k+'：</span><span class="text-slate-200 break-all">'+v+'</span></div>'
+      ).join('') +
+      '<div class="mt-2 pt-2 border-t border-slate-700 '+(d.ok?'text-emerald-300':'text-amber-300')+'">'+(d.verdict||'')+'</div></div>';
+  }catch(e){
+    $('tgMsg').className = 'text-xs ml-3 text-rose-300';
+    $('tgMsg').textContent = '❌ 網絡錯誤';
+  }
 }
 
 refresh();

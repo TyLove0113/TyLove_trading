@@ -9,7 +9,6 @@ import threading
 import time
 from datetime import datetime
 
-import schedule  # 已停用，改用自己計香港時間（見 scheduler_loop）
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
@@ -233,9 +232,21 @@ def gold_test_telegram():
     """測試黃金專用 bot 通唔通。"""
     import notifier
     token, chat = notifier._creds("gold")
-    if not token or not chat:
-        return jsonify({"ok": False,
-                        "error": "未設定 TELEGRAM_GOLD_BOT_TOKEN 或 TELEGRAM_GOLD_CHAT_ID"})
+    missing = []
+    if not token:
+        missing.append("TELEGRAM_GOLD_BOT_TOKEN")
+    if not chat:
+        missing.append("TELEGRAM_GOLD_CHAT_ID")
+    if missing:
+        return jsonify({
+            "ok": False,
+            "token_set": bool(token),
+            "chat_set": bool(chat),
+            "chat_masked": (chat[:4] + "…" + chat[-3:]) if len(chat) > 8 else ("(空白)" if not chat else chat),
+            "error": "Railway 讀唔到：" + "、".join(missing) +
+                     "。檢查：①Variables 名稱要完全一致 ②加完要 Redeploy ③Chat ID 係數字"
+                     "（例如 524897657），唔係 bot token 開頭嗰串。",
+        })
     ok = notifier.push("✅ 黃金分析 bot 連線成功（TyLove）。\n呢個係測試訊息。", channel="gold")
     return jsonify({"ok": ok, "error": None if ok else "發送失敗，檢查 token / chat_id"})
 

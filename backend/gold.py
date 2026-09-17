@@ -176,8 +176,9 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     ]
     if not out["session_ok"]:
         reasons.append("⚠️ 而家唔係倫敦／紐約活躍時段，流動性差、點差會擴闊")
-    if out["today_trades"] >= config.GOLD_MAX_TRADES_PER_DAY:
-        reasons.append(f"⚠️ 今日已有 {out['today_trades']} 筆訊號（上限 {config.GOLD_MAX_TRADES_PER_DAY} 筆），唔再出")
+    _lim = config.GOLD_MAX_TRADES_PER_DAY          # 0 = 不限
+    if _lim > 0 and out["today_trades"] >= _lim:
+        reasons.append(f"⚠️ 今日已有 {out['today_trades']} 筆訊號（上限 {_lim} 筆），唔再出")
 
     direction = None
     if broke_up and not prev_up:
@@ -185,7 +186,7 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     elif broke_dn and not prev_dn:
         direction = "short"
 
-    blocked = (out["today_trades"] >= config.GOLD_MAX_TRADES_PER_DAY) or not out["session_ok"]
+    blocked = (_lim > 0 and out["today_trades"] >= _lim) or not out["session_ok"]
 
     if direction is None:
         out["reasons"] = reasons

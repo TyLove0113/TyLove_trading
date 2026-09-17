@@ -56,6 +56,22 @@
 <!-- 訊號 -->
 <div id="signal" class="mb-5"></div>
 
+<!-- 黃金參數（可即時改，唔需要重新部署） -->
+<div class="card p-4 mb-5">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div class="text-sm font-semibold">⚙️ 黃金參數</div>
+    <div class="flex gap-2">
+      <button onclick="saveGSettings()" class="text-sm px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500">儲存</button>
+      <button onclick="resetGSettings()" class="text-sm px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600">回復預設</button>
+    </div>
+  </div>
+  <div class="text-xs text-slate-500 mb-3">
+    改完撳「儲存」即時生效，唔需要重新部署。每日最多訊號設 <b>0 = 不限</b>。
+  </div>
+  <div id="gsettings" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
+  <div id="gsetMsg" class="text-xs mt-2"></div>
+</div>
+
 <!-- 記錄方法說明 -->
 <div class="card p-4 mb-5">
   <div class="text-sm font-semibold mb-2">📝 點樣記錄你嘅黃金交易</div>
@@ -97,7 +113,7 @@ async function refresh(){
     $('ts').textContent = d.time;
     $('atr').textContent = d.atr;
     $('atrp').textContent = d.atr_pct + '% of 價格';
-    $('cnt').textContent = d.today_trades + ' / ' + d.max_trades;
+    $('cnt').textContent = d.today_trades + ' / ' + (d.max_trades > 0 ? d.max_trades : '不限');
     $('sess').textContent = d.session_ok ? '✅ 活躍時段' : '⏸ 非活躍時段';
     $('spr').textContent = d.spread;
     renderSignal(d);
@@ -182,6 +198,58 @@ async function testTg(){
 
 refresh();
 setInterval(refresh, 60000);
+
+// ---------------------------------------------------------------- 黃金參數
+let GSPEC = null;
+async function loadGSettings(){
+  try{
+    const r = await fetch('/api/settings'); const d = await r.json();
+    const all = d.spec || {};
+    GSPEC = Object.fromEntries(Object.entries(all).filter(([k]) => k.startsWith('GOLD_')));
+    const box = document.getElementById('gsettings');
+    if(!Object.keys(GSPEC).length){ box.innerHTML = '<div class="text-xs text-slate-500">冇可調參數</div>'; return; }
+    box.innerHTML = Object.entries(GSPEC).map(([k,s]) => `
+      <div>
+        <label class="text-xs text-slate-400">${s.label}${s.unit ? `（${s.unit}）` : ''}</label>
+        <div class="flex items-center gap-2 mt-1">
+          <input id="gset_${k}" type="number" ${s.type==='int' ? 'step="1"' : 'step="any"'}
+                 min="${s.min}" max="${s.max}" value="${d.values[k]}"
+                 class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-sm"/>
+          <span class="text-xs text-slate-600 whitespace-nowrap">${s.min}–${s.max}</span>
+        </div>
+        <div class="text-xs text-slate-500 mt-1">${s.hint || ''}</div>
+      </div>`).join('');
+  }catch(e){
+    document.getElementById('gsettings').innerHTML = '<div class="text-xs text-rose-300">讀取參數失敗</div>';
+  }
+}
+function saveGSettings(){
+  const body = {};
+  Object.keys(GSPEC || {}).forEach(k => {
+    const el = document.getElementById('gset_' + k);
+    if(el) body[k] = el.value;
+  });
+  pushGSettings(body, '✅ 已儲存，即時生效');
+}
+function resetGSettings(){
+  if(!confirm('確定將所有參數回復到預設值？')) return;
+  pushGSettings({__reset__: true}, '✅ 已回復預設');
+}
+async function pushGSettings(payload, okMsg){
+  const m = document.getElementById('gsetMsg');
+  try{
+    const r = await fetch('/api/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)});
+    const d = await r.json();
+    m.className = 'text-xs ' + (d.ok ? 'text-emerald-300' : 'text-rose-300');
+    m.textContent = d.ok ? okMsg : '❌ ' + (d.error || '儲存失敗');
+    if(d.ok){ loadGSettings(); refresh(); }
+  }catch(e){
+    m.className = 'text-xs text-rose-300';
+    m.textContent = '❌ 網絡錯誤';
+  }
+}
 </script>
 </body>
 </html>

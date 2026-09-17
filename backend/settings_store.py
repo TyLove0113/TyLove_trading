@@ -20,6 +20,7 @@ log = logging.getLogger("tylove.settings")
 _OUR_MODULES = {
     "config", "scanner", "trade_plan", "scoring", "main", "positions",
     "notifier", "data_fetcher", "indicators", "news_sentiment", "settings_store",
+    "gold",
 }
 
 SPEC = {
@@ -53,6 +54,16 @@ SPEC = {
     "WATCH_THRESHOLD": {
         "type": "int", "label": "觀察門檻", "unit": "分", "min": 30, "max": 95,
         "hint": "低過入場門檻，只出觀察提示、唔出交易計劃。"},
+    # ---------------- 黃金 XAU/USD ----------------
+    "GOLD_MAX_TRADES_PER_DAY": {
+        "type": "int", "label": "黃金每日最多訊號", "unit": "個", "min": 0, "max": 50,
+        "hint": "0 = 不限（出幾多個都推送）。訊號越多越唔會 miss，但質素會下降；建議 3–5。"},
+    "GOLD_STOP_ATR": {
+        "type": "float", "label": "黃金止蝕 = ATR ×", "unit": "倍", "min": 0.5, "max": 5,
+        "hint": "回測用 1.0。越大越鬆、越唔易被震走，但每筆虧損越大。"},
+    "GOLD_TARGET_ATR": {
+        "type": "float", "label": "黃金目標 = ATR ×", "unit": "倍", "min": 0.5, "max": 10,
+        "hint": "回測用 3.0。目標 ÷ 止蝕 = 盈虧比。"},
 }
 
 # 喺任何覆蓋之前記低 .env / 程式預設值，用嚟做「回復預設」

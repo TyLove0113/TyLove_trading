@@ -189,6 +189,9 @@ def evaluate(df: pd.DataFrame = None) -> dict:
         "max_trades": config.GOLD_MAX_TRADES_PER_DAY,
         "session_ok": _session_ok(t.to_pydatetime()),
         "data_symbol": config.GOLD_SYMBOL,
+        "spot_offset": config.GOLD_SPOT_OFFSET,
+        "data_age_min": round(
+            (datetime.now(ZoneInfo(config.HK_TZ)) - t.to_pydatetime()).total_seconds() / 60, 1),
     }
 
     # ---- 訊號判斷 ----
@@ -287,6 +290,57 @@ def _pick_lot(stop_dist: float) -> float:
 
 
 # ------------------------------------------------------------------ 主入口
+def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
+    """⚡ 即時預警：價格一穿 20 支區間就推，唔等 K 線收盤。
+
+    為咩要：正式訊號要等 K 線收盤（M15 = 最多遲 15 分鐘），再加掃描間隔，
+    實測收到時已經遲 20–25 分鐘，對即市買賣完全唔達標。
+    呢個預警用「未收盤」嘅最新支 K 線，所以可以即刻出。
+
+    代價：價格可能彈返入區間（假突破）。所以同正式訊號分開標示。
+    同一支 K 線、同一個方向只推一次。
+    """
+    if df is None:
+        df = add_indicators(fetch())          # 故意保留未收盤嘅最新支
+    if len(df) < 25:
+        return {"ok": False, "reason": "數據不足"}
+    last = df.iloc[-1]
+    t = df.index[-1]
+    chan_hi = float(df["High"].iloc[-21:-1].max())
+    chan_lo = float(df["Low"].iloc[-21:-1].min())
+    price = float(last["Close"])
+    ts = t.strftime("%Y-%m-%d %H:%M")
+
+    if price > chan_hi:
+        direction, level = "long", chan_hi
+    elif price < chan_lo:
+        direction, level = "short", chan_lo
+    else:
+        return {"ok": True, "fired": False}
+
+    key = f"{ts}|{direction}"
+    init_db()
+    with _conn() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS gold_alerts"
+                  "(k TEXT PRIMARY KEY, ts TEXT, direction TEXT, price REAL)")
+        if c.execute("SELECT 1 FROM gold_alerts WHERE k = ?", (key,)).fetchone():
+            return {"ok": True, "fired": False, "reason": "呢支 K 線已預警過"}
+        c.execute("INSERT INTO gold_alerts(k, ts, direction, price) VALUES(?,?,?,?)",
+                  (key, ts, direction, price))
+
+    info = {"direction": direction, "level": round(level, 2), "price": round(price, 2),
+            "time": ts, "diff": round(price - level, 2),
+            "spot_offset": config.GOLD_SPOT_OFFSET, "data_age_min": 0.0}
+    if push:
+        try:
+            import notifier
+            notifier.push(notifier.fmt_gold_early(info), channel="gold")
+        except Exception:  # noqa: BLE001
+            log.exception("黃金即時預警推送失敗")
+    log.info("⚡ 黃金即時預警：%s 穿 %s（價 %s）", direction, round(level, 2), round(price, 2))
+    return {"ok": True, "fired": True, **info}
+
+
 def scan(push: bool = True) -> dict:
     """跑一次黃金分析。有訊號就存 DB + 推 Telegram。"""
     try:

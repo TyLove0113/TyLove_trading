@@ -89,6 +89,16 @@ def job_gold_scan():
         log.exception("黃金掃描失敗")
 
 
+def job_gold_early():
+    """⚡ 黃金即時預警 —— 唔等 K 線收盤，價穿區間即推（快約 15 分鐘）。"""
+    if not config.GOLD_ENABLED or not config.GOLD_EARLY_ALERT:
+        return
+    try:
+        gold.early_alert(push=True)
+    except Exception:  # noqa: BLE001
+        log.exception("黃金即時預警失敗")
+
+
 def job_close_reminder():
     try:
         scanner.closing_reminder()
@@ -143,6 +153,9 @@ def scheduler_loop():
                     if time.time() - last_gold >= config.GOLD_CHECK_MIN * 60:
                         last_gold = time.time()
                         threading.Thread(target=job_gold_scan, daemon=True).start()
+                        # ⚡ 即時預警：唔等 K 線收盤，價穿即推
+                        if config.GOLD_EARLY_ALERT:
+                            threading.Thread(target=job_gold_early, daemon=True).start()
 
             if time.time() - last_monitor >= MONITOR_INTERVAL_MIN * 60:
                 last_monitor = time.time()

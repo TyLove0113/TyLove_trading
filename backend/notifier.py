@@ -252,26 +252,49 @@ def fmt_error(where: str, err: str) -> str:
 
 # ------------------------------------------------------------------ 格式化：黃金
 def fmt_gold_signal(g: dict) -> str:
-    """黃金訊號通知。"""
+    """黃金訊號通知（正式版：K 線已收盤）。"""
     if not g.get("has_signal"):
         return ("*【黃金 XAU/USD】暫無訊號*\n"
                 f"現價 {g['price']}（{g['time']}）\n"
                 f"狀態：{g.get('state','')}\n"
                 f"{'／'.join(g.get('reasons', [])[:3])}")
 
-    arrow = "🟢 做多" if g["direction"] == "long" else "🔴 做空"
+    off = g.get("spot_offset", 0) or 0
+    long_ = g["direction"] == "long"
+    arrow = "🟢 做多" if long_ else "🔴 做空"
+    age = g.get("data_age_min")
+    age_txt = f"{age:.0f} 分鐘" if isinstance(age, (int, float)) else "—"
+
+    def s(v):                       # 換算成 MT4 現貨等價位
+        return round(float(v) - off, 2)
+
     lines = [
         f"*【黃金 XAU/USD】{arrow}*",
-        f"時間 {g['time']}　現價 {g['price']}",
+        f"訊號 K 線 {g['time']}（香港時間）",
         "─" * 18,
-        f"入場 *{g['entry']}*",
-        f"止蝕 *{g['stop']}*（距離 {g['stop_dist']} 美元）",
-        f"目標 *{g['target']}*（距離 {g['target_dist']} 美元）",
+    ]
+    if off:
+        lines += [
+            f"✅ 已做基準校正（−{off:g}），以下係 *MT4 現貨等價位*",
+            f"入場 *{s(g['entry'])}*",
+            f"止蝕 *{s(g['stop'])}*（距離 {g['stop_dist']} 美元）",
+            f"目標 *{s(g['target'])}*（距離 {g['target_dist']} 美元）",
+        ]
+    else:
+        lines += [
+            "⚠️ *未做基準校正* — 程式用 COMEX 期貨，你 MT4 係現貨，",
+            "兩者差 US$20–35。*請只採用「距離」*，套落你自己 MT4 嘅現價：",
+            f"止蝕 = 你入場價 {'+' if not long_ else '−'} {g['stop_dist']} 美元",
+            f"目標 = 你入場價 {'−' if not long_ else '+'} {g['target_dist']} 美元",
+            f"（期貨參考位 入場 {g['entry']}／止蝕 {g['stop']}／目標 {g['target']}）",
+        ]
+    lines += [
         f"風險回報比 1 : {g['rr']}",
         "─" * 18,
         f"建議手數 *{g['lot']} 手*（= {g['oz']} 盎司）",
         f"如果用 0.01 手：最大虧損 *US${g['risk_usd']:.2f}*",
         f"ATR(14) = {g['atr']}（{g['atr_pct']}% of 價格）",
+        f"⏱ 數據時間距今 {age_txt}（正式訊號要等 K 線收盤）",
         "",
         "理由：" + "；".join(g.get("reasons", [])[:3]),
         "",
@@ -279,3 +302,23 @@ def fmt_gold_signal(g: dict) -> str:
         "─ 落單由你本人喺 MT4 執行，記住填 S/L ─",
     ]
     return "\n".join(lines)
+
+
+def fmt_gold_early(a: dict) -> str:
+    """⚡ 黃金即時預警（價格啱啱穿區間，K 線未收盤）。"""
+    long_ = a.get("direction") == "long"
+    arrow = "🟢 向上突破" if long_ else "🔴 向下突破"
+    off = a.get("spot_offset", 0) or 0
+    lvl = round(float(a["level"]) - off, 2)
+    px = round(float(a["price"]) - off, 2)
+    return "\n".join([
+        f"*【黃金 XAU/USD】⚡ 即時預警 — {arrow}*",
+        f"時間 {a['time']}（香港時間）",
+        f"突破位 *{lvl}*　現價 *{px}*",
+        f"（已穿 {abs(a['diff']):.2f} 美元）",
+        "─" * 18,
+        f"通道：前 20 支 K 線高／低點",
+        "⚠️ 呢個係 *未收盤* 嘅即時預警，價位可能彈返入區間。",
+        "K 線收盤後如果仍然突破，會再出正式訊號確認。",
+        "─ 落單由你本人喺 MT4 執行，記住填 S/L ─",
+    ])

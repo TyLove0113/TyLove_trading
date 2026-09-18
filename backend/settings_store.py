@@ -64,6 +64,14 @@ SPEC = {
     "GOLD_TARGET_ATR": {
         "type": "float", "label": "黃金目標 = ATR ×", "unit": "倍", "min": 0.5, "max": 10,
         "hint": "回測用 3.0。目標 ÷ 止蝕 = 盈虧比。"},
+    "GOLD_SPOT_OFFSET": {
+        "type": "float", "label": "基準校正（期貨 − MT4 現貨）", "unit": "美元",
+        "min": -200, "max": 200,
+        "hint": "程式用 COMEX 期貨，你 MT4 係現貨。填兩者差額就自動換算成 MT4 價位；"
+                "填 0 就只提供距離。做法：同一刻睇程式現價同 MT4 現價，相減。"},
+    "GOLD_CHECK_MIN": {
+        "type": "int", "label": "黃金檢查間隔", "unit": "分鐘", "min": 1, "max": 60,
+        "hint": "活躍時段（香港 15:00–01:00）每幾分鐘檢查一次。1 = 最快。"},
 }
 
 # 喺任何覆蓋之前記低 .env / 程式預設值，用嚟做「回復預設」

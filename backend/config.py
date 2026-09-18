@@ -103,7 +103,18 @@ GOLD_SCAN_TIMES = os.getenv(
 # 0 = 停用，改為只用上面嘅 GOLD_SCAN_TIMES。
 # 點解要連續：M15 每 15 分鐘一支 K 線，一日活躍時段有約 40 支；
 # 只喺固定幾個鐘數掃，會 miss 九成突破。
-GOLD_CHECK_MIN = int(os.getenv("GOLD_CHECK_MIN", "5"))
+GOLD_CHECK_MIN = int(os.getenv("GOLD_CHECK_MIN", "1"))
+
+# 即時預警：價格一穿區間就即刻推，唔等 K 線收盤（快約 15 分鐘）。
+GOLD_EARLY_ALERT = int(os.getenv("GOLD_EARLY_ALERT", "1"))
+
+# ⚠️ 基準校正（好重要）
+# 程式用 COMEX 期貨 GC=F，但你 MT4 係現貨 XAUUSD —— 兩者差約 US$20–35，
+# 而且差距會隨時間漂移。填「期貨價 − 你 MT4 現價」嘅差額（正數），
+# 程式就會將所有價位換算成你 MT4 睇到嘅價。
+# 例：期貨 4392、MT4 現貨 4370 → 填 22
+# 唔填（0）的話，通知會改為只提供「距離」，你自己套落 MT4 現價。
+GOLD_SPOT_OFFSET = float(os.getenv("GOLD_SPOT_OFFSET", "0"))
 
 # 黃金專用 Telegram bot（唔填就唔會推送，但網頁照睇得到）
 # 兩種寫法都接受（TELEGRAM_GOLD_* 同 GOLD_TELEGRAM_*），唔想再因為名唔對而收唔到通知

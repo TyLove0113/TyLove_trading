@@ -20,6 +20,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -75,13 +76,44 @@ def recent(limit: int = 20) -> list:
 
 
 def _count_today() -> int:
+    """今日已出訊號數（用香港時間計日，唔好跟容器 UTC）。"""
     init_db()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(ZoneInfo(config.HK_TZ)).strftime("%Y-%m-%d")
     with _conn() as c:
         row = c.execute(
             "SELECT COUNT(*) n FROM gold_signals WHERE ts LIKE ? AND direction IS NOT NULL",
             (today + "%",)).fetchone()
     return int(row["n"]) if row else 0
+
+
+def _already_pushed(ts: str) -> bool:
+    """同一支 K 線只推一次 —— 連續監控每 5 分鐘跑一次，冇呢個就會狂推。"""
+    if not ts:
+        return False
+    init_db()
+    with _conn() as c:
+        row = c.execute("SELECT 1 FROM gold_signals WHERE ts = ? LIMIT 1", (ts,)).fetchone()
+    return row is not None
+
+
+def _use_closed(df: pd.DataFrame, minutes: int = 15) -> pd.DataFrame:
+    """只用「已經收盤」嘅 K 線。
+
+    未行完嘅最後一支 K 線，價位仲會變 —— 依賴佢會出假突破訊號
+    （掃描嗰刻穿咗，收盤又跌返入去）。回測都係用收盤價，所以呢度保持一致。
+    """
+    if df is None or len(df) == 0:
+        return df
+    t = df.index[-1]
+    try:
+        bar_start = t.to_pydatetime()
+    except AttributeError:
+        bar_start = t
+    tz = getattr(bar_start, "tzinfo", None)
+    now = datetime.now(tz) if tz else datetime.now()
+    if (now - bar_start).total_seconds() < minutes * 60:
+        return df.iloc[:-1]
+    return df
 
 
 # ------------------------------------------------------------------ 指標
@@ -128,7 +160,7 @@ def _session_ok(t: datetime) -> bool:
 def evaluate(df: pd.DataFrame = None) -> dict:
     """分析最新一支 K 線，回傳完整訊號字典。"""
     if df is None:
-        df = add_indicators(fetch())
+        df = add_indicators(_use_closed(fetch()))
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -264,6 +296,9 @@ def scan(push: bool = True) -> dict:
         return {"ok": False, "error": str(exc)}
 
     if g.get("has_signal"):
+        if _already_pushed(g.get("time")):
+            log.info("黃金：%s 呢支 K 線已經推過，唔重複推送", g.get("time"))
+            return g
         try:
             _store(g)
             g["today_trades"] = _count_today()

@@ -92,12 +92,18 @@ GOLD_OZ_PER_LOT = float(os.getenv("GOLD_OZ_PER_LOT", "100"))   # 1 手 = 100 盎
 GOLD_BREAKOUT_BARS = int(os.getenv("GOLD_BREAKOUT_BARS", "20"))
 GOLD_STOP_ATR = float(os.getenv("GOLD_STOP_ATR", "1.0"))
 GOLD_TARGET_ATR = float(os.getenv("GOLD_TARGET_ATR", "3.0"))
-GOLD_MAX_TRADES_PER_DAY = int(os.getenv("GOLD_MAX_TRADES_PER_DAY", "1"))
+GOLD_MAX_TRADES_PER_DAY = int(os.getenv("GOLD_MAX_TRADES_PER_DAY", "3"))
 
-# 掃描時段（香港時間）—— 覆蓋倫敦開市、紐約開市、美市活躍時段
+# 掃描時段（香港時間）—— 只作後備；正常用下面嘅連續監控
 GOLD_SCAN_TIMES = os.getenv(
     "GOLD_SCAN_TIMES", "15:05,16:05,17:05,20:35,21:35,22:35,23:35"
 ).split(",")
+
+# 連續監控：活躍時段（香港 15:00–01:00）內每 N 分鐘檢查一次突破。
+# 0 = 停用，改為只用上面嘅 GOLD_SCAN_TIMES。
+# 點解要連續：M15 每 15 分鐘一支 K 線，一日活躍時段有約 40 支；
+# 只喺固定幾個鐘數掃，會 miss 九成突破。
+GOLD_CHECK_MIN = int(os.getenv("GOLD_CHECK_MIN", "5"))
 
 # 黃金專用 Telegram bot（唔填就唔會推送，但網頁照睇得到）
 # 兩種寫法都接受（TELEGRAM_GOLD_* 同 GOLD_TELEGRAM_*），唔想再因為名唔對而收唔到通知

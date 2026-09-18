@@ -117,6 +117,7 @@ def scheduler_loop():
     last_day = None
     fired = set()
     last_monitor = 0.0
+    last_gold = 0.0
 
     while True:
         try:
@@ -133,7 +134,15 @@ def scheduler_loop():
                     threading.Thread(target=job_close_reminder, daemon=True).start()
                 else:
                     threading.Thread(target=job_open_scan, daemon=True).start()
-                    threading.Thread(target=job_gold_scan, daemon=True).start()
+
+            # 黃金：活躍時段（香港 15:00–01:00）內每 N 分鐘檢查一次。
+            # ⚠️ 唔可以綁港股時間 —— 港股掃描時段（09:25/10:30/11:30/14:00/15:50）
+            # 大部分都唔喺黃金活躍時段，會被 _session_ok 過濾晒，一日最多得一次機會。
+            if config.GOLD_ENABLED and config.GOLD_CHECK_MIN > 0:
+                if t.hour >= 15 or t.hour < 1:
+                    if time.time() - last_gold >= config.GOLD_CHECK_MIN * 60:
+                        last_gold = time.time()
+                        threading.Thread(target=job_gold_scan, daemon=True).start()
 
             if time.time() - last_monitor >= MONITOR_INTERVAL_MIN * 60:
                 last_monitor = time.time()

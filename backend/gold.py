@@ -204,10 +204,13 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     prev_up = float(prev["Close"]) > float(prev["hh"]) if pd.notna(prev["hh"]) else False
     prev_dn = float(prev["Close"]) < float(prev["ll"]) if pd.notna(prev["ll"]) else False
 
+    # 顯示用嘅價一律扣校正，同入場／止蝕／目標保持一致
+    _off = config.GOLD_SPOT_OFFSET
+    _tag = "（已校正）" if _off else ""
     reasons = [
         f"EMA20 {'高於' if trend_up else '低於'} EMA50（{'上升' if trend_up else '下降'}趨勢）",
         f"RSI(14) = {rsi:.1f}",
-        f"前 20 支 K 線區間：{float(last['ll']):.2f} – {float(last['hh']):.2f}",
+        f"前 20 支 K 線區間：{float(last['ll']) - _off:.2f} – {float(last['hh']) - _off:.2f}{_tag}",
     ]
     if not out["session_ok"]:
         reasons.append("⚠️ 而家唔係倫敦／紐約活躍時段，流動性差、點差會擴闊")
@@ -221,17 +224,46 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     elif broke_dn and not prev_dn:
         direction = "short"
 
+    # ① 趨勢過濾：跌勢唔做多、升勢唔做空。
+    # 之前 trend_up / trend_dn 計完之後完全冇用過，只係塞入 reasons 當理由顯示，
+    # 結果會出「下降趨勢 + 叫你做多」嘅自相矛盾訊號（2026-09-21 嗰單就係咁輸）。
+    trend_conflict = bool(direction and (
+        (direction == "long" and trend_dn) or (direction == "short" and trend_up)))
+
+    # ② 追高／追低：入場價離突破位幾遠（以 ATR 計）。
+    # 買喺垂直爆升嘅頂部係典型假突破陷阱。
+    chase_atr = 0.0
+    if direction is not None and atr:
+        lvl = float(last["hh"]) if direction == "long" else float(last["ll"])
+        gap = (price - lvl) if direction == "long" else (lvl - price)
+        chase_atr = round(gap / atr, 2)
+
     blocked = (_lim > 0 and out["today_trades"] >= _lim) or not out["session_ok"]
+    if config.GOLD_TREND_FILTER and trend_conflict:
+        blocked = True
+        reasons.append(
+            "⚠️ 逆勢突破："
+            + ("EMA20 低於 EMA50（下降趨勢）" if direction == "long"
+               else "EMA20 高於 EMA50（上升趨勢）")
+            + "，趨勢過濾擋咗呢個" + ("做多" if direction == "long" else "做空"))
+
+    out["trend_conflict"] = trend_conflict
+    out["chase_atr"] = chase_atr
+    out["chase_warn"] = bool(chase_atr > config.GOLD_MAX_CHASE_ATR)
 
     if direction is None:
         out["reasons"] = reasons
-        out["state"] = (f"價位喺區間內（{float(last['ll']):.2f} – {float(last['hh']):.2f}）"
+        out["state"] = (f"價位喺區間內（{float(last['ll']) - _off:.2f} – "
+                        f"{float(last['hh']) - _off:.2f}{_tag}）"
                         f"，等突破。今日已出 {out['today_trades']} 筆訊號。")
         return out
 
     if blocked:
         out["reasons"] = reasons + ["訊號出現，但因上面原因唔推送"]
-        out["state"] = "有突破但被過濾（時段或每日上限）"
+        if config.GOLD_TREND_FILTER and trend_conflict:
+            out["state"] = "有突破但被趨勢過濾擋咗（逆勢唔做）"
+        else:
+            out["state"] = "有突破但被過濾（時段或每日上限）"
         out["direction"] = direction
         return out
 

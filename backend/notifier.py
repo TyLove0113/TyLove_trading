@@ -273,6 +273,13 @@ def fmt_gold_signal(g: dict) -> str:
         f"訊號 K 線 {g['time']}（香港時間）",
         "─" * 18,
     ]
+    # ② 追高警告擺最前 —— 買喺垂直爆升嘅頂部係假突破陷阱
+    if g.get("chase_warn"):
+        lines += [
+            f"🚨 *已追高 {g.get('chase_atr')} 個 ATR* — 價格行遠咗",
+            "👉 呢個位入場好易買喺假突破嘅頂。建議等回踩，或者放棄。",
+            "─" * 18,
+        ]
     if off:
         lines += [
             f"✅ 已做基準校正（−{off:g}），以下係 *MT4 現貨等價位*",

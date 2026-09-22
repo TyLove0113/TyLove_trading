@@ -114,7 +114,14 @@ GOLD_EARLY_ALERT = int(os.getenv("GOLD_EARLY_ALERT", "1"))
 # 程式就會將所有價位換算成你 MT4 睇到嘅價。
 # 例：期貨 4392、MT4 現貨 4370 → 填 22
 # 唔填（0）的話，通知會改為只提供「距離」，你自己套落 MT4 現價。
-GOLD_SPOT_OFFSET = float(os.getenv("GOLD_SPOT_OFFSET", "0"))
+GOLD_SPOT_OFFSET = float(os.getenv("GOLD_SPOT_OFFSET", "28"))
+
+# ① 趨勢過濾：跌勢唔做多、升勢唔做空。1 = 開，0 = 關。
+GOLD_TREND_FILTER = int(os.getenv("GOLD_TREND_FILTER", "1"))
+
+# ② 追高警告門檻：入場價離突破位超過幾個 ATR 就標「已追高」。
+#    0.5 = 半個 ATR。設大啲（例如 2）等於唔理。
+GOLD_MAX_CHASE_ATR = float(os.getenv("GOLD_MAX_CHASE_ATR", "0.5"))
 
 # 黃金專用 Telegram bot（唔填就唔會推送，但網頁照睇得到）
 # 兩種寫法都接受（TELEGRAM_GOLD_* 同 GOLD_TELEGRAM_*），唔想再因為名唔對而收唔到通知

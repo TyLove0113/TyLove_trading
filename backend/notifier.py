@@ -280,7 +280,14 @@ def fmt_gold_signal(g: dict) -> str:
             "👉 呢個位入場好易買喺假突破嘅頂。建議等回踩，或者放棄。",
             "─" * 18,
         ]
-    if off:
+    if g.get("live_feed"):
+        lines += [
+            "✅ *你券商嘅真實報價* —— 同 MT4 完全一致，直接照用",
+            f"入場 *{g['entry']}*",
+            f"止蝕 *{g['stop']}*（距離 {g['stop_dist']} 美元）",
+            f"目標 *{g['target']}*（距離 {g['target_dist']} 美元）",
+        ]
+    elif off:
         lines += [
             f"✅ 已做基準校正（−{off:g}），以下係 *MT4 現貨等價位*",
             f"入場 *{s(g['entry'])}*",

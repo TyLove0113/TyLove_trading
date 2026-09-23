@@ -123,6 +123,14 @@ GOLD_TREND_FILTER = int(os.getenv("GOLD_TREND_FILTER", "1"))
 #    0.5 = 半個 ATR。設大啲（例如 2）等於唔理。
 GOLD_MAX_CHASE_ATR = float(os.getenv("GOLD_MAX_CHASE_ATR", "0.5"))
 
+# ③ 真實報價接收（Option A/C）—— 由你 MT4 EA 或 MT5 Python 推送過嚟
+#    超過幾多分鐘冇新 K 線就當斷線，自動回落到 yfinance
+GOLD_FEED_MAX_AGE_MIN = int(os.getenv("GOLD_FEED_MAX_AGE_MIN", "30"))
+#    防偽 token：同 EA / Python 收集器填同一個值（留空 = 唔檢查）
+GOLD_FEED_TOKEN = os.getenv("GOLD_FEED_TOKEN", "").strip()
+#    設 1 = 強制唔用真實報價（除錯用）
+GOLD_FORCE_YFINANCE = os.getenv("GOLD_FORCE_YFINANCE", "0").strip() == "1"
+
 # 黃金專用 Telegram bot（唔填就唔會推送，但網頁照睇得到）
 # 兩種寫法都接受（TELEGRAM_GOLD_* 同 GOLD_TELEGRAM_*），唔想再因為名唔對而收唔到通知
 GOLD_TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_GOLD_BOT_TOKEN")

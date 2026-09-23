@@ -267,6 +267,65 @@ def hk_test_telegram():
     return jsonify(d)
 
 
+def _feed_auth() -> bool:
+    """檢查推送 token（未設定 GOLD_FEED_TOKEN 就唔檢查）。"""
+    tok = config.GOLD_FEED_TOKEN
+    if not tok:
+        return True
+    return request.headers.get("X-Feed-Token", "") == tok
+
+
+@app.route("/api/gold/feed", methods=["GET"])
+def gold_feed_status():
+    """真實報價接收狀態 —— 畀網頁顯示「EA 連線中／斷線」。"""
+    import feed
+    return jsonify(feed.status())
+
+
+@app.route("/api/gold/tick", methods=["POST"])
+def gold_feed_tick():
+    """收 EA / Python 收集器推過嚟嘅即時報價。"""
+    import feed
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    d = request.get_json(silent=True) or {}
+    try:
+        r = feed.save_tick(
+            symbol=str(d.get("symbol") or "XAUUSD"),
+            bid=float(d["bid"]), ask=float(d["ask"]),
+            source=str(d.get("source") or "mt4"),
+            tick_ts=d.get("t"))
+    except (KeyError, TypeError, ValueError) as exc:
+        return jsonify({"ok": False, "error": f"格式唔啱：{exc}"}), 400
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/gold/bars", methods=["POST"])
+def gold_feed_bars():
+    """收 EA / Python 收集器推過嚟嘅 K 線（你券商嘅真實 OHLC）。
+
+    收到之後，gold.fetch() 會自動改用呢批數據 —— 價位就同 MT4 完全一致。
+    """
+    import feed
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    d = request.get_json(silent=True) or {}
+    bars = d.get("bars") or []
+    if not isinstance(bars, list) or not bars:
+        return jsonify({"ok": False, "error": "冇 bars"}), 400
+    n = feed.save_bars(
+        symbol=str(d.get("symbol") or "XAUUSD"),
+        interval=int(d.get("interval") or 15),
+        bars=bars,
+        source=str(d.get("source") or "mt4"))
+    feed.prune_ticks()
+    st = feed.status()
+    log.info("收到券商 K 線 %d 支（來源 %s）→ %s",
+             n, d.get("source"), st["hint"])
+    return jsonify({"ok": True, "saved": n, "live": st["live"],
+                    "bars_count": st["bars_count"], "hint": st["hint"]})
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def settings_api():
     """風控參數：網頁讀取／修改，改完即時生效。"""

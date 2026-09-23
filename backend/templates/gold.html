@@ -14,6 +14,9 @@
 </head>
 <body class="p-4 md:p-8 max-w-5xl mx-auto">
 
+<!-- 數據來源橫幅：由 /api/gold/feed 即時更新 -->
+<div id="feedBar" class="hidden mb-4 px-4 py-3 rounded-xl text-sm leading-relaxed"></div>
+
 <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
   <div>
     <h1 class="text-xl font-semibold">🥇 黃金 XAU/USD 日內分析</h1>
@@ -213,8 +216,44 @@ async function testTg(){
   }
 }
 
+// 數據來源橫幅：話你知而家用緊券商真實報價定係 yfinance 期貨
+async function loadFeed(){
+  const bar = $('feedBar');
+  try{
+    const r = await fetch('/api/gold/feed');
+    const d = await r.json();
+    bar.classList.remove('hidden');
+    if(d.live){
+      bar.style.background = '#052e16';
+      bar.style.border = '1px solid #166534';
+      bar.style.color = '#86efac';
+      const age = (d.last_bar_age_min != null)
+        ? `　最後 K 線 ${Math.round(d.last_bar_age_min)} 分鐘前` : '';
+      const src = d.source ? `（來源：${d.source}）` : '';
+      bar.innerHTML = `✅ <b>用緊你券商嘅真實報價</b>${src}`
+        + ` — 價位同你 MT4 完全一致，唔需要基準校正${age}`;
+      $('sym') && ($('sym').textContent = d.symbol || 'XAUUSD');
+    } else {
+      bar.style.background = '#2A1215';
+      bar.style.border = '1px solid #7F1D1D';
+      bar.style.color = '#fca5a5';
+      bar.innerHTML = `⚠️ <b>未收到券商報價，用緊 yfinance 期貨（GC=F）</b>`
+        + ` — 價位同你 MT4 差 US$20–35。`
+        + `想改用你券商嘅真實報價，睇 zip 入面 <code>tools/設定指示.md</code>`;
+    }
+  }catch(e){
+    bar.classList.remove('hidden');
+    bar.style.background = '#2A1215';
+    bar.style.border = '1px solid #7F1D1D';
+    bar.style.color = '#fca5a5';
+    bar.textContent = '⚠️ 攞唔到數據來源狀態';
+  }
+}
+
 refresh();
+loadFeed();
 setInterval(refresh, 60000);
+setInterval(loadFeed, 30000);
 
 // ---------------------------------------------------------------- 黃金參數
 let GSPEC = null;

@@ -117,7 +117,38 @@ def _use_closed(df: pd.DataFrame, minutes: int = 15) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------ 指標
+def _live() -> bool:
+    """而家係唔係用緊券商嘅真實報價？"""
+    if config.GOLD_FORCE_YFINANCE:
+        return False
+    try:
+        import feed
+        return feed.is_live()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def effective_offset() -> float:
+    """校正值：用真實券商報價時係 0（唔需要校正）；用期貨時才要。"""
+    return 0.0 if _live() else config.GOLD_SPOT_OFFSET
+
+
 def fetch(interval: str = "15m", period: str = "60d") -> pd.DataFrame:
+    """攞 K 線。優先用人嘅真實券商報價，冇就用 yfinance 期貨。
+
+    呢個就係整個「價位對唔上」問題嘅根治點：
+    券商報價 = 你落單嗰個價，唔需要估校正值。
+    """
+    if interval == "15m":
+        try:
+            import feed
+            live = feed.bars(15)
+            if live is not None and len(live) >= 25 and _live():
+                log.info("用緊券商真實報價（%d 支）", len(live))
+                return live
+        except Exception:  # noqa: BLE001
+            log.exception("讀券商報價失敗，回落 yfinance")
+
     df = yf.Ticker(config.GOLD_SYMBOL).history(
         period=period, interval=interval, auto_adjust=False)
     if df is None or len(df) == 0:
@@ -189,7 +220,8 @@ def evaluate(df: pd.DataFrame = None) -> dict:
         "max_trades": config.GOLD_MAX_TRADES_PER_DAY,
         "session_ok": _session_ok(t.to_pydatetime()),
         "data_symbol": config.GOLD_SYMBOL,
-        "spot_offset": config.GOLD_SPOT_OFFSET,
+        "spot_offset": effective_offset(),
+        "live_feed": _live(),
         "data_age_min": round(
             (datetime.now(ZoneInfo(config.HK_TZ)) - t.to_pydatetime()).total_seconds() / 60, 1),
     }
@@ -205,7 +237,8 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     prev_dn = float(prev["Close"]) < float(prev["ll"]) if pd.notna(prev["ll"]) else False
 
     # 顯示用嘅價一律扣校正，同入場／止蝕／目標保持一致
-    _off = config.GOLD_SPOT_OFFSET
+    # （用券商真實報價時 effective_offset() = 0，即係原價顯示）
+    _off = effective_offset()
     _tag = "（已校正）" if _off else ""
     reasons = [
         f"EMA20 {'高於' if trend_up else '低於'} EMA50（{'上升' if trend_up else '下降'}趨勢）",

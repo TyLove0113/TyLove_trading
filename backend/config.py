@@ -88,6 +88,11 @@ GOLD_LOT_MIN = float(os.getenv("GOLD_LOT_MIN", "0.01"))        # 你嘅最低手
 GOLD_LOT_MAX = float(os.getenv("GOLD_LOT_MAX", "0.05"))        # 你嘅最高手數
 GOLD_OZ_PER_LOT = float(os.getenv("GOLD_OZ_PER_LOT", "100"))   # 1 手 = 100 盎司
 
+# 手數計算用：你黃金戶口嘅本金（美元）同每筆可承受風險（%）
+# ⚠️ 呢兩個一定要填啱，唔係程式會建議過大手數
+GOLD_EQUITY_USD = float(os.getenv("GOLD_EQUITY_USD", "500"))
+GOLD_RISK_PCT = float(os.getenv("GOLD_RISK_PCT", "1.0"))
+
 # 策略參數（對應回測：Donchian 突破 1.0×ATR 止蝕 / 3.0×ATR 目標）
 GOLD_BREAKOUT_BARS = int(os.getenv("GOLD_BREAKOUT_BARS", "20"))
 GOLD_STOP_ATR = float(os.getenv("GOLD_STOP_ATR", "1.0"))

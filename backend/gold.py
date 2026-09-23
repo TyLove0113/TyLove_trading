@@ -311,9 +311,15 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     rr = round(tgt_dist / stop_dist, 2) if stop_dist else 0
 
     # 手數：由你嘅 0.01–0.05 手 range 揀，用風險金額決定喺 range 內嘅位置
-    lot = _pick_lot(stop_dist)
+    eq = config.GOLD_EQUITY_USD
+    rp = config.GOLD_RISK_PCT
+    lot = _pick_lot(stop_dist, eq, rp)
     oz = round(lot * config.GOLD_OZ_PER_LOT, 2)
-    risk_usd = round(stop_dist * oz + config.GOLD_SPREAD_USD * oz, 2)
+    risk_usd = round((stop_dist + config.GOLD_SPREAD_USD) * oz, 2)
+    risk_pct_actual = round(risk_usd / eq * 100, 2) if eq else 0.0
+    # 你本金細 + 最細手數 0.01（= 1 盎司），所以風險完全由止蝕距離決定。
+    # 連最細手數都要蝕超過 2% 本金 → 止蝕太闊，呢筆應該跳過。
+    risk_warn = bool(eq and risk_pct_actual > max(rp * 1.5, 2.0))
 
     out.update({
         "has_signal": True,
@@ -326,6 +332,10 @@ def evaluate(df: pd.DataFrame = None) -> dict:
         "rr": rr,
         "lot": lot,
         "oz": oz,
+        "equity": eq,
+        "risk_pct_target": rp,
+        "risk_pct_actual": risk_pct_actual,
+        "risk_warn": risk_warn,
         "risk_usd": risk_usd,
         "reasons": reasons + [
             f"{'升穿' if direction == 'long' else '跌穿'}前 20 支高位／低位（Donchian 突破）",
@@ -335,23 +345,24 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     return out
 
 
-def _pick_lot(stop_dist: float) -> float:
-    """喺 0.01–0.05 手之間揀一個合理手數。
+def _pick_lot(stop_dist: float, equity: float, risk_pct: float) -> float:
+    """按「本金 × 風險% ÷ 止蝕距離」計手數。
 
-    止蝕距離越大 → 揀越細手數（控制每筆虧損）。
-    呢個唔係「最優化」，只係一個簡單嘅風險控制規則。
+    2026-09 修正：舊版只睇止蝕距離（5 美元內就俾 0.05 手），完全唔理本金，
+    結果 US$500 戶口都會被建議 0.05 手 —— 每筆風險 7.2% 本金，
+    連輸 5 次就蒸發 37%。而 1:3 策略勝率得 25–35%，連輸 5 次係正常事。
+
+    新規則：手數 = (本金 × 風險%) ÷ 止蝕距離 ÷ 每手盎司，
+    向下取到 0.01（唔好超風險），再夾喺你嘅最低／最高手數之間。
     """
     lo, hi = config.GOLD_LOT_MIN, config.GOLD_LOT_MAX
-    if stop_dist <= 0:
+    if stop_dist <= 0 or equity <= 0 or risk_pct <= 0:
         return lo
-    # 止蝕 5 美元內 → 用最大手數；40 美元以上 → 用最細手數
-    if stop_dist <= 5:
-        return hi
-    if stop_dist >= 40:
-        return lo
-    frac = (40 - stop_dist) / 35          # 0 → 1
-    step = round((lo + (hi - lo) * frac) * 100) / 100
-    return max(lo, min(hi, step))
+    risk_usd = equity * risk_pct / 100.0
+    oz_need = risk_usd / stop_dist
+    lot = oz_need / config.GOLD_OZ_PER_LOT
+    lot = int(lot * 100) / 100          # 向下取，確保唔超過風險目標
+    return max(lo, min(hi, round(lot, 2)))
 
 
 # ------------------------------------------------------------------ 主入口

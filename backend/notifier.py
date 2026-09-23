@@ -306,7 +306,11 @@ def fmt_gold_signal(g: dict) -> str:
         f"風險回報比 1 : {g['rr']}",
         "─" * 18,
         f"建議手數 *{g['lot']} 手*（= {g['oz']} 盎司）",
-        f"如果用 0.01 手：最大虧損 *US${g['risk_usd']:.2f}*",
+        f"風險 *US${g['risk_usd']:.2f}* = 你本金嘅 "
+        f"*{g.get('risk_pct_actual', 0):g}%*（目標 {g.get('risk_pct_target', 1):g}%）",
+        *([f"🚨 *呢筆風險仍然超標* —— 即使最細手數都要 "
+           f"{g.get('risk_pct_actual', 0):g}% 本金。止蝕太闊，建議跳過呢筆。"]
+          if g.get("risk_warn") else []),
         f"ATR(14) = {g['atr']}（{g['atr_pct']}% of 價格）",
         f"⏱ 數據時間距今 {age_txt}（正式訊號要等 K 線收盤）",
         "",

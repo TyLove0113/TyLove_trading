@@ -76,6 +76,13 @@ SPEC = {
         "type": "int", "label": "趨勢過濾（1=開 0=關）", "unit": "", "min": 0, "max": 1,
         "hint": "開啟後：EMA20 低於 EMA50 唔做多、高於唔做空。"
                 "呢個會擋走逆勢突破 —— 2026-09-21 嗰單輸錢交易就係咁樣被擋。"},
+    "GOLD_EQUITY_USD": {
+        "type": "float", "label": "黃金戶口本金", "unit": "US$", "min": 10, "max": 10000000,
+        "hint": "用嚟計手數。⚠️ 填錯會建議錯手數。例如你入咗 500 就填 500。"},
+    "GOLD_RISK_PCT": {
+        "type": "float", "label": "每筆風險", "unit": "% 本金", "min": 0.1, "max": 10,
+        "hint": "建議 1–2%。程式會用「本金 × 呢個 % ÷ 止蝕距離」計手數。"
+                "設得越大，手數越大、爆倉風險越高。"},
     "GOLD_MAX_CHASE_ATR": {
         "type": "float", "label": "追高警告門檻", "unit": "ATR", "min": 0, "max": 5,
         "hint": "入場價離突破位超過幾個 ATR 就喺通知標「🚨 已追高」。"

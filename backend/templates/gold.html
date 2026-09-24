@@ -100,13 +100,248 @@
   <div id="tgDiag"></div>
 </div>
 
+<!-- 交易日誌 -->
+<div class="card p-4 mb-5">
+  <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+    <div class="text-sm font-semibold">📒 交易日誌</div>
+    <button onclick="loadJournal()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">重新載入</button>
+  </div>
+  <div class="text-xs text-slate-400 mb-4 leading-relaxed">
+    除咗賺蝕，仲要記低 <b class="text-sky-300">執行偏差</b>（訊號價 vs 你實際入場價）、
+    <b class="text-sky-300">實際點差</b>、同 <b class="text-sky-300">有冇跟足訊號</b>。
+    呢三樣先係將來重跑回測同 debug 嘅材料。
+  </div>
+
+  <div id="jStats" class="mb-5"></div>
+
+  <details id="jFormBox" class="mb-5">
+    <summary class="cursor-pointer text-sm text-sky-400 select-none">➕ 記錄一筆新交易</summary>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 text-xs">
+      <label class="block">開倉時間
+        <input id="jOpenedAt" type="datetime-local" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block">方向
+        <select id="jDirection" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+          <option value="long">🟢 做多</option>
+          <option value="short">🔴 做空</option>
+        </select>
+      </label>
+      <label class="block">跟足程度
+        <select id="jFollowed" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700"></select>
+      </label>
+      <label class="block">訊號入場價 <span class="text-slate-500">（系統報嘅）</span>
+        <input id="jSignalEntry" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block">你實際入場價 <b class="text-amber-400">*</b>
+        <input id="jActualEntry" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-amber-600">
+      </label>
+      <label class="block">手數
+        <input id="jLot" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block">止蝕（訊號）
+        <input id="jSignalStop" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block">止蝕（你設嘅）
+        <input id="jActualStop" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block">目標
+        <input id="jSignalTarget" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block">實際點差 <span class="text-slate-500">（美元）</span>
+        <input id="jSpread" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block col-span-2">備註
+        <input id="jNote" type="text" placeholder="例如：追咗高、等唔到回踩" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+    </div>
+    <div class="flex gap-2 mt-4 flex-wrap items-center">
+      <button onclick="saveJournal()" class="text-sm px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">儲存記錄</button>
+      <button onclick="prefillFromSignal()" class="text-sm px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600">由最新訊號填入</button>
+      <span id="jMsg" class="text-xs ml-2"></span>
+    </div>
+  </details>
+
+  <div id="jList" class="text-xs text-slate-400">載入中…</div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
+
+// ==================== 交易日誌 ====================
+let jData = {trades: [], stats: {}, follow_options: {}};
+
+function jFmt(v, d) { d = (d === undefined) ? 2 : d;
+  return (v === null || v === undefined) ? '—' : Number(v).toFixed(d); }
+
+async function loadJournal() {
+  try {
+    const d = await (await fetch('/api/gold/journal')).json();
+    jData = d;
+    const sel = $('jFollowed');
+    if (!sel.options.length) {
+      sel.innerHTML = Object.entries(d.follow_options || {})
+        .map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+    }
+    jStats(d.stats);
+    jList(d.trades);
+  } catch (e) { $('jList').textContent = '載入失敗：' + e; }
+}
+
+function jCard(k, v, c) {
+  return `<div class="p-2.5 rounded-lg bg-slate-800/60">
+    <div class="text-[10px] text-slate-500 mb-0.5">${k}</div>
+    <div class="text-sm font-semibold" style="color:${c || '#e2e8f0'}">${v}</div></div>`;
+}
+
+function jStats(s) {
+  if (!s || !s.n_closed) {
+    $('jStats').innerHTML = `<div class="text-xs text-slate-400 p-3 rounded-lg bg-slate-800/50">
+      仲未有已平倉記錄${(s && s.n_open) ? `（有 ${s.n_open} 筆持倉中）` : ''}。
+      建議目標：30 筆睇趨勢、100 筆先落結論。</div>`;
+    return;
+  }
+  const pf = s.profit_factor;
+  const c = pf === null ? '#94a3b8' : (pf >= 1.2 ? '#86efac' : (pf >= 1.0 ? '#fbbf24' : '#fca5a5'));
+  const r1 = [['已平倉', s.n_closed + ' 筆'], ['勝率', s.win_rate + '%'],
+              ['總盈虧', (s.total_pnl >= 0 ? '+' : '') + '$' + s.total_pnl],
+              ['利潤因子', pf === null ? '—' : pf]];
+  const r2 = [['平均贏', '$' + s.avg_win], ['平均輸', '$' + s.avg_loss],
+              ['期望值', (s.expectancy >= 0 ? '+' : '') + '$' + s.expectancy],
+              ['最大回撤', '$' + s.max_drawdown],
+              ['平均執行偏差', s.avg_slip_usd === null ? '—' : (s.avg_slip_usd >= 0 ? '+' : '') + '$' + s.avg_slip_usd],
+              ['平均點差', s.avg_spread_usd === null ? '—' : '$' + s.avg_spread_usd]];
+  $('jStats').innerHTML =
+    `<div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">` +
+      r1.map((x, i) => jCard(x[0], x[1], i === 3 ? c : null)).join('') + `</div>
+     <div class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">` +
+      r2.map(x => jCard(x[0], x[1])).join('') + `</div>
+     <div class="text-xs p-2.5 rounded-lg bg-slate-800/60 text-slate-300">${s.verdict || ''}</div>`;
+}
+
+function jList(ts) {
+  if (!ts || !ts.length) {
+    $('jList').innerHTML = '<div class="p-3 rounded-lg bg-slate-800/50">仲未有記錄。</div>';
+    return;
+  }
+  const rows = ts.map(t => {
+    const open = t.status === 'open';
+    const pnl = (t.pnl_usd === null || t.pnl_usd === undefined) ? null : t.pnl_usd;
+    const pnlCell = pnl === null ? '<span class="text-slate-500">持倉中</span>'
+      : `<span style="color:${pnl >= 0 ? '#86efac' : '#fca5a5'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
+    const sp = (t.slip_price === null || t.slip_price === undefined) ? null : t.slip_price;
+    const slip = sp === null ? '—'
+      : `<span style="color:${sp > 0 ? '#fca5a5' : '#86efac'}" title="正數=對你不利">${sp > 0 ? '+' : ''}${sp.toFixed(2)}</span>`;
+    const warn = t.followed === 'chase' ? ' style="color:#fca5a5"' : '';
+    return `<tr class="border-t border-slate-800">
+      <td class="py-1.5 pr-2 whitespace-nowrap">${(t.opened_at || '').replace('T', ' ').slice(5, 16)}</td>
+      <td class="pr-2 whitespace-nowrap">${t.direction === 'long' ? '🟢 多' : '🔴 空'}</td>
+      <td class="pr-2 text-right">${jFmt(t.signal_entry)}</td>
+      <td class="pr-2 text-right font-semibold">${jFmt(t.actual_entry)}</td>
+      <td class="pr-2 text-right">${slip}</td>
+      <td class="pr-2 text-right">${jFmt(t.lot)}</td>
+      <td class="pr-2 text-right">${jFmt(t.spread_at_entry)}</td>
+      <td class="pr-2 whitespace-nowrap"${warn}>${t.followed_label || '—'}</td>
+      <td class="pr-2 text-right">${jFmt(t.exit_price)}</td>
+      <td class="pr-2 text-right">${pnlCell}</td>
+      <td class="whitespace-nowrap">${open ? `<button onclick="jClose(${t.id})" class="px-2 py-0.5 rounded bg-sky-700 hover:bg-sky-600">平倉</button>` : ''}
+        <button onclick="jDel(${t.id})" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-red-700 ml-1">刪</button></td>
+    </tr>`;
+  }).join('');
+  $('jList').innerHTML = `<div class="overflow-x-auto"><table class="w-full text-[11px]">
+    <thead class="text-slate-500"><tr>
+      <th class="text-left py-1 pr-2">開倉</th><th class="text-left pr-2">方向</th>
+      <th class="text-right pr-2">訊號價</th><th class="text-right pr-2">實際價</th>
+      <th class="text-right pr-2">偏差<span class="text-[9px]">/盎司</span></th><th class="text-right pr-2">手數</th>
+      <th class="text-right pr-2">點差</th><th class="text-left pr-2">跟足</th>
+      <th class="text-right pr-2">出場</th><th class="text-right pr-2">盈虧</th>
+      <th class="text-left">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function jNum(id) {
+  const v = $(id).value.trim();
+  return v === '' ? null : Number(v);
+}
+
+function jLocalNow() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// 由最新訊號自動填入（慳時間，減少打錯）
+function prefillFromSignal() {
+  const g = window.lastGold;
+  if (!g) { $('jMsg').textContent = '⚠️ 未載入到訊號，先撳「重新分析」'; return; }
+  $('jOpenedAt').value = jLocalNow();
+  $('jDirection').value = g.direction || 'long';
+  $('jSignalEntry').value = g.entry ?? '';
+  $('jSignalStop').value = g.stop ?? '';
+  $('jSignalTarget').value = g.target ?? '';
+  $('jLot').value = g.lot ?? '';
+  $('jFollowed').value = 'yes';
+  // 點差預設用你上次記錄嘅實際值（比硬編 0.30 準），冇記錄就留空等你填
+  const last = (jData.trades || []).find(t => t.spread_at_entry !== null
+                                              && t.spread_at_entry !== undefined);
+  $('jSpread').value = last ? Number(last.spread_at_entry).toFixed(2) : '';
+  $('jMsg').textContent = '✅ 已由最新訊號填入 —— 記得填「你實際入場價」同「實際點差」';
+}
+
+async function saveJournal() {
+  const actual = jNum('jActualEntry');
+  if (actual === null) { $('jMsg').textContent = '❌ 「你實際入場價」一定要填'; return; }
+  $('jMsg').textContent = '儲存中…';
+  const body = {
+    opened_at: $('jOpenedAt').value || null,
+    direction: $('jDirection').value,
+    followed: $('jFollowed').value,
+    signal_entry: jNum('jSignalEntry'),
+    actual_entry: actual,
+    lot: jNum('jLot'),
+    signal_stop: jNum('jSignalStop'),
+    actual_stop: jNum('jActualStop'),
+    signal_target: jNum('jSignalTarget'),
+    spread_at_entry: jNum('jSpread'),
+    note: $('jNote').value.trim() || null
+  };
+  const d = await (await fetch('/api/gold/journal', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)})).json();
+  if (!d.ok) { $('jMsg').textContent = '❌ ' + (d.error || '儲存失敗'); return; }
+  $('jMsg').textContent = '✅ 已儲存';
+  jData = d; jStats(d.stats); jList(d.trades);
+  ['jActualEntry','jActualStop','jSpread','jNote','jSignalEntry','jSignalStop','jSignalTarget']
+    .forEach(id => { $(id).value = ''; });
+}
+
+async function jClose(id) {
+  const t = (jData.trades || []).find(x => x.id === id);
+  const ex = prompt('出場價係幾多？', t && t.actual_entry ? t.actual_entry : '');
+  if (ex === null || ex === '') return;
+  const pnl = prompt('呢筆盈虧係幾多美元？（可以留空，程式會自動計）', '');
+  const fv = prompt('有冇跟足訊號？（直接撳確定 = 有）', t ? (t.followed || 'yes') : 'yes');
+  const d = await (await fetch(`/api/gold/journal/${id}/close`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({exit_price: Number(ex), pnl_usd: pnl === '' ? null : Number(pnl),
+                          followed: fv || null})})).json();
+  if (!d.ok) { alert('平倉失敗：' + (d.error || '')); return; }
+  jData = d; jStats(d.stats); jList(d.trades);
+}
+
+async function jDel(id) {
+  if (!confirm('確定刪除呢筆記錄？')) return;
+  const d = await (await fetch(`/api/gold/journal/${id}`, {method: 'DELETE'})).json();
+  if (!d.ok) { alert('刪除失敗'); return; }
+  await loadJournal();
+}
+
+loadJournal();
+setInterval(loadJournal, 120000);
+
 
 async function refresh(){
   try{
     const r = await fetch('/api/gold');
     const d = await r.json();
+    if(d.ok) window.lastGold = d;
     if(!d.ok){
       $('signal').innerHTML = `<div class="card p-4" style="border-color:#7F1D1D">
         <div class="text-sm text-red-300">分析失敗：${d.error||'未知錯誤'}</div></div>`;

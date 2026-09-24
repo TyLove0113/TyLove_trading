@@ -200,15 +200,37 @@ def status() -> dict:
     except sqlite3.Error:
         pass
     live = is_live()
+    # 分辨三種情況，唔好一律顯示紅色 —— 咁樣先診斷得到
+    if live:
+        state = "ok"
+    elif tick_age is not None and tick_age < 150:
+        state = "bars_stale"      # EA 通（有報價），但 K 線推送停咗
+    elif tick_age is not None:
+        state = "stale"           # 有紀錄但都好舊
+    else:
+        state = "offline"         # 完全冇收過嘢
+
+    if state == "ok":
+        hint = "✅ 用緊你券商嘅真實報價 —— 價位同 MT4 完全一致"
+    elif state == "bars_stale":
+        hint = (f"⚠️ EA 有報價入嚟（{tick_age:.0f} 秒前），但 K 線已經 "
+                f"{age:.0f} 分鐘冇更新。EA 應該係掛住但 K 線推送停咗 —— "
+                f"試下重新拖 EA 落圖表，或者睇 EA 左上角有冇紅字。")
+    elif state == "stale":
+        hint = (f"⚠️ 最後收到係 {tick_age / 60:.0f} 分鐘前。"
+                f"EA 可能已經停咗或者電腦休眠咗。")
+    else:
+        hint = ("⚠️ 完全未收過券商報價，暫時用 yfinance 期貨"
+                "（價位有 US$20–35 偏差）。睇 zip 入面 tools/設定指示.md。")
+
     return {
         "live": live,
+        "state": state,
         "source": "券商真實報價" if live else f"yfinance 期貨（{config.GOLD_SYMBOL}）",
         "tick": tick,
         "tick_age_sec": tick_age,
         "bar_age_min": round(age, 1) if age is not None else None,
         "bars_count": n_bars,
         "max_age_min": config.GOLD_FEED_MAX_AGE_MIN,
-        "hint": ("✅ 用緊你券商嘅真實報價 —— 價位同 MT4 完全一致"
-                 if live else
-                 "⚠️ 未收到券商報價，暫時用 yfinance 期貨（價位有 US$20–35 偏差）"),
+        "hint": hint,
     }

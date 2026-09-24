@@ -326,6 +326,46 @@ def gold_feed_bars():
                     "bars_count": st["bars_count"], "hint": st["hint"]})
 
 
+@app.route("/api/gold/journal", methods=["GET", "POST"])
+def gold_journal():
+    """黃金交易日誌 —— 記錄執行偏差、點差、跟足程度。"""
+    import journal
+    if request.method == "GET":
+        return jsonify({"ok": True, "trades": journal.list_trades(),
+                        "stats": journal.stats(),
+                        "follow_options": journal.FOLLOW_OPTIONS})
+    d = request.get_json(silent=True) or {}
+    try:
+        tid = journal.add_trade(d)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "id": tid, "trades": journal.list_trades(),
+                    "stats": journal.stats()})
+
+
+@app.route("/api/gold/journal/<int:tid>", methods=["POST", "DELETE"])
+def gold_journal_one(tid):
+    import journal
+    if request.method == "DELETE":
+        return jsonify({"ok": journal.delete_trade(tid)})
+    d = request.get_json(silent=True) or {}
+    return jsonify({"ok": journal.update_trade(tid, d),
+                    "trades": journal.list_trades(), "stats": journal.stats()})
+
+
+@app.route("/api/gold/journal/<int:tid>/close", methods=["POST"])
+def gold_journal_close(tid):
+    import journal
+    d = request.get_json(silent=True) or {}
+    try:
+        ok = journal.close_trade(tid, d.get("exit_price"), d.get("pnl_usd"),
+                                 d.get("note"), d.get("followed"))
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": ok, "trades": journal.list_trades(),
+                    "stats": journal.stats()})
+
+
 @app.route("/api/settings", methods=["GET", "POST"])
 def settings_api():
     """風控參數：網頁讀取／修改，改完即時生效。"""
@@ -436,6 +476,7 @@ def start_background():
         return
     _BG_STARTED = True
     init_db()
+    import journal; journal.init_db()
     _warn_if_not_persistent()
     threading.Thread(target=scheduler_loop, daemon=True).start()
     # 開機先做一次掃描，確認設定正確

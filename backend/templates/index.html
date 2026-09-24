@@ -72,6 +72,13 @@
     </div>
   </div>
   <div id="positions" class="mb-8"></div>
+<!-- 過往交易記錄（已平倉）-->
+<div class="card p-4 mb-8">
+  <div class="text-sm font-semibold mb-3">📜 過往交易記錄</div>
+  <div id="histStats" class="mb-3"></div>
+  <div id="histList" class="text-xs text-slate-400">載入中…</div>
+</div>
+
 
   <!-- ===================== 風控參數 ===================== -->
   <h2 class="text-lg font-semibold mb-3">⚙️ 風控參數（改完即時生效）</h2>
@@ -320,7 +327,48 @@ function renderNews(rows){
   }).join('');
 }
 
-load(); loadSettings(); setInterval(load, 60000);
+async function loadHistory(){
+  try{
+    const r = await fetch('/api/positions');
+    const d = await r.json();
+    const st = d.stats || {}, rows = d.closed || [];
+    $('histStats').innerHTML = st.trades
+      ? `<div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">`
+        + [['已平倉', st.trades+' 筆'],['勝率', st.win_rate+'%'],
+           ['已實現盈虧', (st.total_pnl_hkd>=0?'+':'')+'HK$'+st.total_pnl_hkd],
+           ['平均贏', '+'+st.avg_win_pct+'%'],['平均輸', st.avg_loss_pct+'%']]
+          .map(([k,v])=>`<div class="p-2 rounded-lg bg-slate-800/60">
+            <div class="text-[10px] text-slate-500">${k}</div>
+            <div class="font-semibold">${v}</div></div>`).join('')
+        + `</div>`
+      : '<div class="text-xs text-slate-400">仲未有已平倉記錄。平倉之後呢度會自動出現，並累積勝率同盈虧。</div>';
+
+    $('histList').innerHTML = rows.length
+      ? `<div class="overflow-x-auto"><table class="w-full text-[11px]">
+          <thead class="text-slate-500"><tr>
+            <th class="text-left py-1 pr-2">平倉時間</th>
+            <th class="text-left pr-2">股票</th>
+            <th class="text-right pr-2">買入</th>
+            <th class="text-right pr-2">賣出</th>
+            <th class="text-right pr-2">盈虧</th>
+            <th class="text-left">原因</th></tr></thead>
+          <tbody>${rows.map(x=>{
+            const p = (x.exit_price!=null && x.entry_price)
+                    ? (x.exit_price/x.entry_price-1)*100 : null;
+            return `<tr class="border-t border-slate-800">
+              <td class="py-1.5 pr-2 whitespace-nowrap">${(x.closed_at||'').slice(5,16).replace('T',' ')}</td>
+              <td class="pr-2">${x.symbol} <span class="text-slate-500">${x.name||''}</span></td>
+              <td class="text-right pr-2">${x.entry_price}</td>
+              <td class="text-right pr-2">${x.exit_price ?? '—'}</td>
+              <td class="text-right pr-2" style="color:${(p??0)>=0?'#86efac':'#fca5a5'}">${p==null?'—':((p>=0?'+':'')+p.toFixed(2)+'%')}</td>
+              <td>${x.exit_reason||'—'}</td></tr>`;}).join('')}
+          </tbody></table></div>`
+      : '';
+  }catch(e){ $('histList').textContent = '載入失敗：' + e; }
+}
+
+load(); loadSettings(); loadHistory();
+setInterval(load, 60000); setInterval(loadHistory, 300000);
 </script>
 </body>
 </html>

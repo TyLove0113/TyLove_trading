@@ -13,6 +13,9 @@
 </style>
 </head>
 <body class="p-4 md:p-8 max-w-5xl mx-auto">
+<!-- 資料庫持久化警告 + 備份（由 /api/db-status 更新） -->
+<div id="dbBar" class="hidden mb-4 px-4 py-3 rounded-xl text-sm leading-relaxed"></div>
+
 
 <!-- 數據來源橫幅：由 /api/gold/feed 即時更新 -->
 <div id="feedBar" class="hidden mb-4 px-4 py-3 rounded-xl text-sm leading-relaxed"></div>
@@ -110,12 +113,13 @@
     除咗賺蝕，仲要記低 <b class="text-sky-300">執行偏差</b>（訊號價 vs 你實際入場價）、
     <b class="text-sky-300">實際點差</b>、同 <b class="text-sky-300">有冇跟足訊號</b>。
     呢三樣先係將來重跑回測同 debug 嘅材料。
+    <b class="text-amber-400">打錯唔使刪 —— 撳記錄右邊「編輯」直接改。</b>
   </div>
 
   <div id="jStats" class="mb-5"></div>
 
   <details id="jFormBox" class="mb-5">
-    <summary class="cursor-pointer text-sm text-sky-400 select-none">➕ 記錄一筆新交易</summary>
+    <summary id="jFormTitle" class="cursor-pointer text-sm text-sky-400 select-none">➕ 記錄一筆新交易</summary>
     <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 text-xs">
       <label class="block">開倉時間
         <input id="jOpenedAt" type="datetime-local" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
@@ -155,7 +159,8 @@
       </label>
     </div>
     <div class="flex gap-2 mt-4 flex-wrap items-center">
-      <button onclick="saveJournal()" class="text-sm px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">儲存記錄</button>
+      <button id="jSaveBtn" onclick="saveJournal()" class="text-sm px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">儲存記錄</button>
+      <button id="jCancelBtn" onclick="cancelEdit()" class="hidden text-sm px-3 py-2 rounded-lg bg-slate-600 hover:bg-slate-500">取消編輯</button>
       <button onclick="prefillFromSignal()" class="text-sm px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600">由最新訊號填入</button>
       <span id="jMsg" class="text-xs ml-2"></span>
     </div>
@@ -165,6 +170,74 @@
 </div>
 
 <script>
+
+// ================= 資料庫持久化 + 備份 =================
+async function loadDbStatus() {
+  const bar = document.getElementById('dbBar');
+  if (!bar) return;
+  try {
+    const d = await (await fetch('/api/db-status')).json();
+    const n = d.total_rows;
+    bar.classList.remove('hidden');
+    if (d.persistent) {
+      bar.style.background = '#052e16';
+      bar.style.border = '1px solid #166534';
+      bar.style.color = '#86efac';
+      bar.innerHTML = '✅ <b>記錄會自動保存</b> —— 資料庫喺 Volume 上面'
+        + '（共 ' + n + ' 筆，' + d.size_kb + ' KB）'
+        + '　<button onclick="doBackup()" class="underline">匯出備份</button>'
+        + '　<button onclick="document.getElementById(\'restoreFile\').click()" '
+        + 'class="underline">匯入</button>'
+        + '<input type="file" id="restoreFile" accept=".json" class="hidden" '
+        + 'onchange="doRestore(this)">';
+      return;
+    }
+    bar.style.background = '#2A1215';
+    bar.style.border = '1px solid #7F1D1D';
+    bar.style.color = '#fca5a5';
+    bar.innerHTML = '🚨 <b>記錄唔會自動保存！</b>每次更新程式都會清空所有記錄（目前 '
+      + n + ' 筆）。'
+      + '<div class="mt-2 text-xs opacity-90">做法：Railway → 服務 → Settings → '
+      + 'Volumes 掛一個去 <code>/data</code>，再喺 Variables 加 '
+      + '<code>DB_PATH=/data/tylove.db</code>。</div>'
+      + '<div class="mt-2"><b>未搞好之前，落完單記得撳：</b></div>'
+      + '<div class="mt-2 flex gap-2 flex-wrap">'
+      + '<button onclick="doBackup()" class="px-3 py-1.5 rounded-lg bg-red-800 hover:bg-red-700">⬇️ 匯出備份</button>'
+      + '<button onclick="document.getElementById(\'restoreFile\').click()" '
+      + 'class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">⬆️ 匯入備份</button>'
+      + '</div>'
+      + '<input type="file" id="restoreFile" accept=".json" class="hidden" '
+      + 'onchange="doRestore(this)">';
+  } catch (e) {
+    bar.classList.remove('hidden');
+    bar.textContent = '（讀唔到資料庫狀態）';
+  }
+}
+
+function doBackup() {
+  const a = document.createElement('a');
+  a.href = '/api/backup';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function doRestore(input) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f);
+  try {
+    const d = await (await fetch('/api/restore', {method: 'POST', body: fd})).json();
+    alert(d.ok ? ('✅ 還原完成，共 ' + d.total + ' 筆記錄') : ('❌ ' + (d.error || '還原失敗')));
+  } catch (e) {
+    alert('❌ 還原失敗：' + e);
+  }
+  input.value = '';
+  loadDbStatus();
+  if (typeof loadJournal === 'function') loadJournal();
+  if (typeof load === 'function') load();
+}
 const $ = id => document.getElementById(id);
 
 // ==================== 交易日誌 ====================
@@ -244,6 +317,7 @@ function jList(ts) {
       <td class="pr-2 text-right">${jFmt(t.exit_price)}</td>
       <td class="pr-2 text-right">${pnlCell}</td>
       <td class="whitespace-nowrap">${open ? `<button onclick="jClose(${t.id})" class="px-2 py-0.5 rounded bg-sky-700 hover:bg-sky-600">平倉</button>` : ''}
+        <button onclick="editTrade(${t.id})" class="px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 ml-1">編輯</button>
         <button onclick="jDel(${t.id})" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-red-700 ml-1">刪</button></td>
     </tr>`;
   }).join('');
@@ -285,6 +359,44 @@ function prefillFromSignal() {
   $('jMsg').textContent = '✅ 已由最新訊號填入 —— 記得填「你實際入場價」同「實際點差」';
 }
 
+// 編輯模式：jEditId 有值 = 改緊舊記錄；null = 新增
+let jEditId = null;
+
+function resetForm() {
+  jEditId = null;
+  ['jActualEntry','jActualStop','jSpread','jNote','jSignalEntry',
+   'jSignalStop','jSignalTarget','jLot'].forEach(id => { $(id).value = ''; });
+  $('jSaveBtn').textContent = '儲存記錄';
+  $('jCancelBtn').classList.add('hidden');
+  $('jFormTitle').textContent = '➕ 記錄一筆新交易';
+}
+
+function cancelEdit() { resetForm(); $('jMsg').textContent = ''; }
+
+function editTrade(id) {
+  const t = (jData.trades || []).find(x => x.id === id);
+  if (!t) return;
+  jEditId = id;
+  const set = (fid, v) => { $(fid).value = (v === null || v === undefined) ? '' : v; };
+  set('jOpenedAt', (t.opened_at || '').slice(0, 16));
+  set('jDirection', t.direction);
+  set('jFollowed', t.followed);
+  set('jSignalEntry', t.signal_entry);
+  set('jActualEntry', t.actual_entry);
+  set('jLot', t.lot);
+  set('jSignalStop', t.signal_stop);
+  set('jActualStop', t.actual_stop);
+  set('jSignalTarget', t.signal_target);
+  set('jSpread', t.spread_at_entry);
+  set('jNote', t.note || '');
+  $('jFormBox').open = true;
+  $('jSaveBtn').textContent = '💾 更新記錄';
+  $('jCancelBtn').classList.remove('hidden');
+  $('jFormTitle').textContent = '✏️ 修改第 ' + id + ' 筆記錄';
+  $('jMsg').textContent = '';
+  $('jFormBox').scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
 async function saveJournal() {
   const actual = jNum('jActualEntry');
   if (actual === null) { $('jMsg').textContent = '❌ 「你實際入場價」一定要填'; return; }
@@ -302,14 +414,15 @@ async function saveJournal() {
     spread_at_entry: jNum('jSpread'),
     note: $('jNote').value.trim() || null
   };
-  const d = await (await fetch('/api/gold/journal', {
+  const url = jEditId ? ('/api/gold/journal/' + jEditId) : '/api/gold/journal';
+  const d = await (await fetch(url, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)})).json();
   if (!d.ok) { $('jMsg').textContent = '❌ ' + (d.error || '儲存失敗'); return; }
-  $('jMsg').textContent = '✅ 已儲存';
-  jData = d; jStats(d.stats); jList(d.trades);
-  ['jActualEntry','jActualStop','jSpread','jNote','jSignalEntry','jSignalStop','jSignalTarget']
-    .forEach(id => { $(id).value = ''; });
+  const wasEdit = !!jEditId;
+  resetForm();
+  await loadJournal();
+  $('jMsg').textContent = wasEdit ? '✅ 已更新記錄' : '✅ 已儲存記錄';
 }
 
 async function jClose(id) {
@@ -489,6 +602,8 @@ refresh();
 loadFeed();
 setInterval(refresh, 60000);
 setInterval(loadFeed, 30000);
+loadDbStatus();
+setInterval(loadDbStatus, 120000);
 
 // ---------------------------------------------------------------- 黃金參數
 let GSPEC = null;

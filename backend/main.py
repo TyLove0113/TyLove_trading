@@ -4,12 +4,13 @@
 香港時間排程：開市前掃描、日內掃描、持倉監控、收市提醒。
 """
 import logging
+import json
 import os
 import threading
 import time
 from datetime import datetime
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 from flask_cors import CORS
 
 import config
@@ -365,6 +366,46 @@ def gold_journal_close(tid):
     return jsonify({"ok": ok, "trades": journal.list_trades(),
                     "stats": journal.stats()})
 
+
+
+@app.route("/api/db-status", methods=["GET"])
+def api_db_status():
+    """資料庫係咪喺持久化位置 —— 網頁用嚟顯示警告橫幅。"""
+    import backup
+    return jsonify({"ok": True, **backup.db_status()})
+
+
+@app.route("/api/backup", methods=["GET"])
+def api_backup():
+    """匯出所有記錄做 JSON 檔案下載。"""
+    import backup
+    data = backup.export_all()
+    name = "TyLove備份_" + data["exported_at"][:10] + ".json"
+    return Response(
+        json.dumps(data, ensure_ascii=False, indent=1),
+        mimetype="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.route("/api/restore", methods=["POST"])
+def api_restore():
+    """由備份 JSON 還原記錄。"""
+    import backup
+    d = request.get_json(silent=True)
+    if d is None:
+        f = request.files.get("file")
+        if f is None:
+            return jsonify({"ok": False, "error": "冇收到檔案"}), 400
+        try:
+            d = json.loads(f.read().decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"ok": False, "error": f"讀唔到 JSON：{exc}"}), 400
+    try:
+        r = backup.import_all(d)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    log.info("還原備份：%s", r)
+    return jsonify({"ok": True, **r, "status": backup.db_status()})
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def settings_api():

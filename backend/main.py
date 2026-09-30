@@ -285,6 +285,40 @@ def gold_feed_status():
     return jsonify(st)
 
 
+@app.route("/api/gold/deals", methods=["POST", "GET"])
+def gold_deals():
+    """POST：EA 推送成交記錄（桌面版讀券商歷史，手機落嘅單一樣讀到）。
+    GET：睇收到嘅成交 + 有幾多張草稿等確認。
+
+    收到嘅成交唔會直接入帳 —— 全部開 status='draft'，
+    要用戶喺網頁核對完撳「確認」先成為正式日誌。
+    """
+    import deals
+    if request.method == "GET":
+        return jsonify({"ok": True, "deals": deals.recent(30),
+                        "stats": deals.stats()})
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    d = request.get_json(silent=True) or {}
+    return jsonify(deals.ingest(d.get("deals") or []))
+
+
+@app.route("/api/gold/journal/<int:tid>/approve", methods=["POST"])
+def gold_journal_approve(tid):
+    """確認草稿 → 正式入帳。用戶自己睇過先撳，系統唔會代你決定。"""
+    import journal
+    d = request.get_json(silent=True) or {}
+    ok = journal.approve(tid, d)      # d 可以帶用戶改過嘅欄位
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/gold/journal/<int:tid>/discard", methods=["POST"])
+def gold_journal_discard(tid):
+    """丟棄草稿 —— 入錯或者唔想記嘅，直接刪走，唔會污染統計。"""
+    import journal
+    return jsonify({"ok": journal.discard(tid)})
+
+
 @app.route("/api/gold/tick", methods=["POST"])
 def gold_feed_tick():
     """收 EA / Python 收集器推過嚟嘅即時報價。"""
@@ -335,6 +369,7 @@ def gold_journal():
     import journal
     if request.method == "GET":
         return jsonify({"ok": True, "trades": journal.list_trades(),
+                        "drafts": journal.drafts(),
                         "stats": journal.stats(),
                         "follow_options": journal.FOLLOW_OPTIONS})
     d = request.get_json(silent=True) or {}
@@ -368,6 +403,92 @@ def gold_journal_close(tid):
     return jsonify({"ok": ok, "trades": journal.list_trades(),
                     "stats": journal.stats()})
 
+
+
+# ------------------------------------------------------------------ 截圖 OCR
+def _shot_dir():
+    import os
+    base = os.path.dirname(os.path.abspath(config.DB_PATH))
+    d = os.path.join(base, "shots")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+@app.route("/api/gold/ocr", methods=["POST"])
+def gold_ocr():
+    """上載 MT4 截圖 → OCR 讀出欄位 → 開一張草稿等你確認。
+
+    安全：OCR 永遠唔會直接寫入正式記錄，只會開 status='draft'。
+    """
+    import os, time
+    import journal, ocr
+
+    f = request.files.get("shot")
+    if f is None:
+        return jsonify({"ok": False, "error": "冇收到圖檔"}), 400
+    data = f.read()
+    if not data:
+        return jsonify({"ok": False, "error": "圖檔係空"}), 400
+    if len(data) > 12 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "圖太大（上限 12 MB）"}), 400
+
+    # 存圖（連埋記錄一齊保留，方便日後翻查）
+    name = time.strftime("%Y%m%d-%H%M%S") + ".png"
+    try:
+        with open(os.path.join(_shot_dir(), name), "wb") as fh:
+            fh.write(data)
+    except OSError:
+        name = None
+
+    res = ocr.extract(data)
+    if not res.get("ok"):
+        return jsonify({"ok": False, "error": res.get("error", "OCR 失敗"),
+                        "shot": name}), 200
+
+    fl = res.get("fields") or {}
+    if not fl:
+        return jsonify({"ok": True, "created": None, "shot": name,
+                        "fields": {}, "notes": res.get("notes", []) +
+                        ["讀唔到任何數字 —— 試下截圖時放大啲，或者影埋「Open / Close」嗰幾行。"],
+                        "texts": res.get("texts", [])}), 200
+
+    d = {
+        "direction": fl.get("direction"),
+        "actual_entry": fl.get("entry"),
+        "actual_stop": fl.get("sl"),
+        "exit_price": fl.get("exit"),
+        "pnl_usd": fl.get("profit"),
+        "lot": fl.get("lots"),
+        "data_source": "mt4",
+        "status": "draft",
+        "note": "由截圖自動讀入，請核對",
+        "shot": name,
+    }
+    tid = journal.add_trade(d)
+    return jsonify({"ok": True, "created": tid, "shot": name,
+                    "fields": fl, "confidence": res.get("confidence", {}),
+                    "notes": res.get("notes", []),
+                    "texts": res.get("texts", [])})
+
+
+@app.route("/api/gold/shot/<path:name>", methods=["GET"])
+def gold_shot(name):
+    """睇返之前上載嘅截圖（限制喺 shots 目錄內）。"""
+    import os
+    from flask import send_from_directory
+    d = os.path.realpath(_shot_dir())
+    full = os.path.realpath(os.path.join(d, name))
+    if not full.startswith(d):
+        return jsonify({"ok": False, "error": "唔准"}), 403
+    if not os.path.exists(full):
+        return jsonify({"ok": False, "error": "冇呢張圖"}), 404
+    return send_from_directory(d, os.path.basename(full))
+
+
+@app.route("/api/gold/ocr-status", methods=["GET"])
+def gold_ocr_status():
+    import ocr
+    return jsonify({"ok": True, **ocr.status()})
 
 
 @app.route("/api/db-status", methods=["GET"])

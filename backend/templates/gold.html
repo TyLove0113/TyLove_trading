@@ -168,6 +168,21 @@
     </div>
   </details>
 
+  <div id="ocrBox" class="mb-4 p-3 rounded-lg bg-slate-800/50 border border-slate-700">
+    <div class="flex items-center gap-3 flex-wrap">
+      <span class="text-xs text-slate-300">📷 上載 MT4 截圖，自動讀出入場／平倉／盈虧：</span>
+      <button onclick="document.getElementById('ocrFile').click()"
+              class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold">
+        ⬆️ 揀截圖
+      </button>
+      <input type="file" id="ocrFile" accept="image/*" class="hidden" onchange="jOcr(this)">
+      <span id="ocrMsg" class="text-xs text-slate-400"></span>
+    </div>
+    <div class="text-[11px] text-slate-500 mt-1.5">
+      讀到嘅數字會開一張「草稿」—— <b>唔會直接入帳</b>，你核對完撳「✅ 確認入帳」先算。
+    </div>
+  </div>
+  <div id="jDraft" class="hidden mb-4"></div>
   <div id="jList" class="text-xs text-slate-400">載入中…</div>
 </div>
 
@@ -257,6 +272,94 @@ async function doRestore(input) {
 }
 const $ = id => document.getElementById(id);
 
+// ==================== 待確認草稿 ====================
+// 2026-09-30：MT4 自動讀入嘅成交會放喺度等你核對。
+// 你撳「確認」先正式入帳，撳「丟棄」就刪走 —— 系統唔會代你決定。
+async function jOcr(input){
+  const f = input.files && input.files[0];
+  if (!f) return;
+  const msg = $('ocrMsg');
+  msg.textContent = '🔍 解讀中…（第一次會慢少少）';
+  try {
+    const fd = new FormData();
+    fd.append('shot', f);
+    const r = await (await fetch('/api/gold/ocr', {method:'POST', body:fd})).json();
+    if (!r.ok) { msg.textContent = '❌ ' + (r.error || '解讀失敗'); return; }
+    if (!r.created) { msg.textContent = '⚠️ 讀唔到數字，請試下截圖時放大啲'; return; }
+    const fl = r.fields || {};
+    msg.textContent = '✅ 讀到 ' + Object.keys(fl).length + ' 個欄位 → 開咗草稿，請核對';
+    loadJournal();
+  } catch (e) {
+    msg.textContent = '❌ ' + e;
+  } finally { input.value = ''; }
+}
+
+function jDrafts(ds){
+  const box = $('jDraft');
+  if (!ds.length){ box.classList.add('hidden'); box.innerHTML=''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = `<div class="p-3 rounded-lg" style="background:#2A2413;border:1px solid #7A5C1E">
+    <div class="text-sm font-semibold mb-1" style="color:#F5C842">
+      ⏳ 有 ${ds.length} 張草稿等你確認</div>
+    <div class="text-[11px] mb-3" style="color:#C9A94E">
+      呢啲係由 MT4 成交記錄自動讀入嘅。核對過先撳確認 —— 記錄係將來判斷策略嘅基礎，唔好畀錯資料入去。</div>
+    ${ds.map(jDraftRow).join('')}</div>`;
+}
+
+function jDraftRow(t){
+  const shot = t.shot
+    ? `<a href="/api/gold/shot/${t.shot}" target="_blank">
+         <img src="/api/gold/shot/${t.shot}" style="height:56px;border-radius:6px;margin-top:4px"
+              title="撳開睇原圖"></a>`
+    : '<span class="text-slate-500" style="font-size:10px">（冇截圖）</span>';
+  const num = (k, label, val, step) => `
+    <label class="block"><span class="text-[10px] opacity-70">${label}</span>
+    <input id="d${t.id}_${k}" type="number" step="${step||'any'}" value="${val==null?'':val}"
+      class="w-full bg-slate-900/60 border border-slate-600 rounded px-2 py-1 text-xs"></label>`;
+  const side = t.direction === 'short' ? '🔴 做空' : '🟢 做多';
+  const pnl = t.pnl_usd;
+  const pnlTxt = pnl==null ? '—' :
+    `<span style="color:${pnl>=0?'#4ade80':'#f87171'}">${pnl>=0?'+':''}${pnl} USD</span>`;
+  return `<div class="mb-2 p-3 rounded-lg bg-slate-900/50 border border-slate-700">
+    <div class="flex flex-wrap items-center gap-2 mb-2 text-xs">
+      <b>#${t.id}</b><span>${side}</span><span>${t.lot} 手</span>
+      <span class="opacity-70">P/L ${pnlTxt}</span>
+      <span class="px-1.5 py-0.5 rounded text-[10px]" style="background:#14321C;color:#6EE7A0">🟢 MT4 自動讀入</span>
+      ${t.opened_at?`<span class="opacity-50 text-[10px]">${t.opened_at}</span>`:''}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+      ${num('actual_entry','實際入場',t.actual_entry,'0.01')}
+      ${num('actual_stop','實際止蝕',t.actual_stop,'0.01')}
+      ${num('exit_price','平倉價',t.exit_price,'0.01')}
+      ${num('lot','手數',t.lot,'0.01')}
+    </div>
+    <div class="flex gap-2 items-center">
+      <input id="d${t.id}_note" placeholder="備註（例：有冇跟足訊號）" value="${t.note||''}"
+        class="flex-1 bg-slate-900/60 border border-slate-600 rounded px-2 py-1 text-xs">
+      <button onclick="jApprove(${t.id})"
+        class="px-3 py-1.5 rounded-lg text-xs font-semibold" style="background:#166534;color:#86efac">✅ 確認入帳</button>
+      <button onclick="jDiscard(${t.id})"
+        class="px-3 py-1.5 rounded-lg text-xs" style="background:#3A1A1A;color:#f87171">🗑 丟棄</button>
+    </div></div>`;
+}
+
+async function jApprove(id){
+  const g = k => { const e = $('d'+id+'_'+k); return e ? e.value : undefined; };
+  const body = {actual_entry:g('actual_entry'), actual_stop:g('actual_stop'),
+                exit_price:g('exit_price'), lot:g('lot'), note:g('note')};
+  const r = await (await fetch('/api/gold/journal/'+id+'/approve',
+    {method:'POST', headers:{'Content-Type':'application/json'},
+     body:JSON.stringify(body)})).json();
+  if (!r.ok){ alert('確認失敗'); return; }
+  loadJournal();
+}
+
+async function jDiscard(id){
+  if (!confirm('確定丟棄 #'+id+'？呢張草稿會刪走，唔會留低。')) return;
+  await fetch('/api/gold/journal/'+id+'/discard', {method:'POST'});
+  loadJournal();
+}
+
 // ==================== 交易日誌 ====================
 let jData = {trades: [], stats: {}, follow_options: {}};
 
@@ -273,6 +376,7 @@ async function loadJournal() {
         .map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
     }
     jStats(d.stats);
+    jDrafts(d.drafts || []);
     jList(d.trades);
   } catch (e) { $('jList').textContent = '載入失敗：' + e; }
 }

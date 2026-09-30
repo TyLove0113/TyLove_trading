@@ -56,7 +56,8 @@ def init_db() -> None:
                 followed        TEXT NOT NULL DEFAULT 'yes',
                 note            TEXT,
                 status          TEXT NOT NULL DEFAULT 'open',
-    data_source     TEXT          -- mt4 = 券商真實報價 / yfin = 期貨延遲
+    data_source     TEXT,         -- mt4 = 券商真實報價 / yfin = 期貨延遲
+                shot            TEXT          -- 截圖檔名（shots/ 目錄）
 
             )""")
         _migrate(c)
@@ -80,6 +81,9 @@ def _migrate(c) -> None:
         if "data_source" not in cols:
             c.execute("ALTER TABLE gold_trades ADD COLUMN data_source TEXT")
             log.info("已為 gold_trades 加入 data_source 欄位")
+        if "shot" not in cols:
+            c.execute("ALTER TABLE gold_trades ADD COLUMN shot TEXT")
+            log.info("已為 gold_trades 加入 shot 欄位")
     except sqlite3.Error:
         log.exception("遷移失敗")
 
@@ -99,18 +103,28 @@ def add_trade(d: dict) -> int:
 
     with _conn() as c:
         cur = c.execute(
+            # 2026-09-30：status 原本寫死 'open'。改為可傳入 ——
+            # 由 MT4 自動讀入嘅成交係 'draft'（草稿），要用戶確認先入帳；
+            # 已平倉嘅成交會連埋 closed_at / exit_price / pnl_usd 一齊寫。
             """INSERT INTO gold_trades
                (opened_at, direction, signal_entry, actual_entry,
                 signal_stop, signal_target, actual_stop, lot,
-                spread_at_entry, followed, note, status, data_source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?, 'open', ?)""",
-            ((d.get("opened_at") or "").strip() or _now(), direction,
+                spread_at_entry, followed, note, status, data_source,
+                closed_at, exit_price, pnl_usd, shot)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ((d.get("opened_at") or d.get("entered_at") or "").strip() or _now(),
+             direction,
              _f(d.get("signal_entry")), actual,
              _f(d.get("signal_stop")), _f(d.get("signal_target")),
              _f(d.get("actual_stop")), _f(d.get("lot")),
              _f(d.get("spread_at_entry")), followed,
              (d.get("note") or "").strip() or None,
-             (d.get("data_source") or "").strip() or None))
+             (d.get("status") or "open").strip(),
+             (d.get("data_source") or "").strip() or None,
+             (d.get("closed_at") or "").strip() or None,
+             _f(d.get("exit_price")),
+             (None if d.get("pnl_usd") in (None, "") else float(d.get("pnl_usd"))),
+             (d.get("shot") or "").strip() or None))
         return int(cur.lastrowid)
 
 
@@ -172,12 +186,23 @@ def close_trade(tid: int, exit_price, pnl_usd=None, note=None,
 def delete_trade(tid: int) -> bool:
     with _conn() as c:
         return c.execute("DELETE FROM gold_trades WHERE id=?", (tid,)).rowcount > 0
-def list_trades(limit: int = 200) -> list[dict]:
-    """全部記錄，最新喺前。附帶計好嘅執行偏差。"""
+def list_trades(limit: int = 200, include_draft: bool = False) -> list[dict]:
+    """正式記錄，最新喺前。附帶計好嘅執行偏差。
+
+    2026-09-30：預設唔包 status='draft'。草稿係由 MT4 自動讀入、
+    未經用戶確認嘅，唔應該混入正式記錄（會污染統計同你嘅判斷）。
+    草稿另外用 drafts() 取。
+    """
     with _conn() as c:
-        rows = c.execute(
-            "SELECT * FROM gold_trades ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if include_draft:
+            rows = c.execute(
+                "SELECT * FROM gold_trades ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM gold_trades WHERE status<>'draft' "
+                "ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -280,3 +305,76 @@ def stats() -> dict:
         s["verdict"] = (f"利潤因子 {pf} —— 大約打和或更差。"
                         f"加埋點差同滑價實際係蝕。")
     return s
+
+
+# ------------------------------------------------------------------ 草稿流程
+# 2026-09-30 新增。由 MT4 自動讀入嘅成交一律係 'draft'，
+# 用戶喺網頁核對完撳「確認」先變正式記錄 —— 因為日誌係將來判斷策略
+# 有冇優勢嘅唯一材料，唔可以畀未核對嘅資料污染。
+_EDITABLE = {
+    "direction", "actual_entry", "actual_stop", "lot", "exit_price",
+    "pnl_usd", "note", "opened_at", "closed_at", "signal_entry",
+    "signal_stop", "signal_target", "followed", "spread_at_entry",
+}
+_TEXT_COLS = {"direction", "note", "opened_at", "closed_at", "followed"}
+
+
+def drafts() -> list:
+    """未確認嘅草稿。"""
+    try:
+        init_db()
+        with _conn() as c:
+            rs = c.execute("SELECT * FROM gold_trades WHERE status='draft' "
+                           "ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rs]
+    except sqlite3.Error:
+        log.exception("讀取草稿失敗")
+        return []
+
+
+def approve(tid: int, edits: dict | None = None) -> bool:
+    """確認草稿。可以順便套用用戶改過嘅欄位。"""
+    try:
+        init_db()
+        with _conn() as c:
+            r = c.execute("SELECT * FROM gold_trades WHERE id=?", (tid,)).fetchone()
+            if not r or r["status"] != "draft":
+                return False
+            if edits:
+                sets, vals = [], []
+                for k, v in edits.items():
+                    if k not in _EDITABLE:
+                        continue
+                    sets.append(k + "=?")
+                    vals.append((str(v).strip() or None) if k in _TEXT_COLS
+                                else _f(v))
+                if sets:
+                    vals.append(tid)
+                    c.execute("UPDATE gold_trades SET " + ",".join(sets) +
+                              " WHERE id=?", vals)
+            # 已經有平倉價／盈虧 → 直接就係已完結嘅交易
+            r2 = c.execute("SELECT exit_price, pnl_usd FROM gold_trades "
+                           "WHERE id=?", (tid,)).fetchone()
+            done = bool(r2["exit_price"] is not None or r2["pnl_usd"] is not None)
+            c.execute("UPDATE gold_trades SET status=? WHERE id=?",
+                      ("closed" if done else "open", tid))
+        return True
+    except sqlite3.Error:
+        log.exception("確認草稿失敗")
+        return False
+
+
+def discard(tid: int) -> bool:
+    """丟棄草稿。只可以丟棄 draft —— 正式記錄唔畀誤刪。"""
+    try:
+        init_db()
+        with _conn() as c:
+            r = c.execute("SELECT status FROM gold_trades WHERE id=?",
+                          (tid,)).fetchone()
+            if not r or r["status"] != "draft":
+                return False
+            c.execute("DELETE FROM gold_trades WHERE id=?", (tid,))
+        return True
+    except sqlite3.Error:
+        log.exception("丟棄草稿失敗")
+        return False

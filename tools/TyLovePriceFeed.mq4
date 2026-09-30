@@ -1,10 +1,30 @@
 //+------------------------------------------------------------------+
-//|  TyLovePriceFeed.mq4   v1.1                                      |
+//|  TyLovePriceFeed.mq4   v2.1       2026-09-29                     |
 //|  將你券商嘅真實報價推送去 TyLove 交易系統                          |
 //+------------------------------------------------------------------+
+//  版本記錄（想確認有冇更新，睇圖表左上角會唔會寫 v2.1）
+//
+//  v2.1  2026-09-29  ⭐ 修好「EA 話成功、但網站收唔到」嘅元兇
+//                     - API_BASE 少咗 https:// 會令 WebRequest 一定失敗。
+//                       新版會自動補返，填漏都用得。
+//                     - 錯誤訊息具體化（4060=未允許 / 4062=主機搵唔到 /
+//                       401,403=token 唔對 / 4xx=伺服器問題）
+//
+//  v2.0  2026-09-24  ⭐ 修好「EA 顯示成功、但網站變紅」嘅 bug
+//                     - 計時改用 TimeLocal()（電腦時鐘）
+//                       舊版用 TimeCurrent()，佢係「最後一個報價嘅時間」，
+//                       市靜嗰陣會凍結 → K 線永遠唔重推 → 網站變紅
+//                     - K 線改為每 5 分鐘推最近 6 支（舊版每 15 分鐘推 300 支）
+//                     - 新增「券商報價落後幾秒」診斷顯示
+//
+//  v1.1  2026-09-23  加時區偏移自動偵測（MT4 時間戳係券商 server 時間）
+//  v1.0  2026-09-23  第一版
+//+------------------------------------------------------------------+
 #property copyright "TyLove"
-#property version   "1.10"
+#property version   "2.10"
 #property strict
+
+#define EA_VERSION "v2.1"
 
 //================= 你只需要改呢兩行 =================
 extern string API_BASE         = "https://tylovetrading-production.up.railway.app";
@@ -19,6 +39,7 @@ extern int    PushBarsEveryMin = 5;    // 每幾分鐘補推一次 K 線
 extern string SymbolName       = "";   // 留空 = 用圖表本身嘅品種
 
 string   g_sym;
+string   g_base;                 // 正規化後嘅 API 網址（一定有 https://）
 int      g_tf, g_digits, g_tzOffset = 0;
 datetime g_lastBarPush    = 0;   // 用 TimeLocal() 計
 datetime g_lastServerTime = 0;   // 上次見到嘅券商時間
@@ -38,8 +59,24 @@ int MapTF(int m) {
 }
 
 string D2S(double v) { return DoubleToString(v, g_digits); }
+
+// 2026-09-29：MQL4 嘅 WebRequest 一定要有完整協定（https://）。
+// 只填域名（例如 xxx.up.railway.app）會令請求失敗，而且錯誤訊息唔清楚，
+// 容易誤以為「有推送成功」。呢個函數自動補返，填漏都用得。
+string NormalizeBase(string s) {
+    StringTrimLeft(s);
+    StringTrimRight(s);
+    while (StringLen(s) > 0 && StringGetChar(s, StringLen(s) - 1) == '/')
+        s = StringSubstr(s, 0, StringLen(s) - 1);
+    if (StringLen(s) == 0) return ("");
+    string low = s;
+    StringToLower(low);
+    if (StringFind(low, "http://") == 0 || StringFind(low, "https://") == 0)
+        return (s);
+    return ("https://" + s);
+}
 bool Post(string path, string body) {
-    string url = API_BASE + path;
+    string url = g_base + path;
     string headers = "Content-Type: application/json\r\n";
     if (StringLen(FEED_TOKEN) > 0) headers += "X-Feed-Token: " + FEED_TOKEN + "\r\n";
     char post[], result[];
@@ -49,12 +86,26 @@ bool Post(string path, string body) {
     ArrayResize(post, len);
     ResetLastError();
     int code = WebRequest("POST", url, headers, 5000, post, result, rh);
-    if (code == 200) { g_failStreak = 0; return true; }
-    g_fail++; g_failStreak++;
+    if (code == 200) { g_failStreak = 0; return (true); }
+    g_fail++;
+    g_failStreak++;
     Print("❌ 推送失敗 ", path, "　HTTP=", code, "　錯誤碼=", GetLastError());
-    if (code == -1 && GetLastError() == 4060)
-        Print("   → 去「工具→選項→智能交易系統→允許 WebRequest 網址」加入：", API_BASE);
-    return false;
+    if (code == -1) {
+        int e = GetLastError();
+        if (e == 4060)
+            Print("   → WebRequest 未獲允許。工具→選項→智能交易系統→"
+                  "允許 WebRequest 網址，加入：", g_base);
+        else if (e == 4062)
+            Print("   → 搵唔到主機。檢查 API_BASE 有冇打錯：", g_base);
+        else
+            Print("   → 錯誤碼 ", e, "　目標：", g_base);
+    } else if (code == 401 || code == 403) {
+        Print("   → 認證失敗。EA 嘅 FEED_TOKEN 要同 Railway 嘅 FEED_TOKEN 一樣"
+              "（現時填嘅係：", FEED_TOKEN, "）");
+    } else if (code >= 400) {
+        Print("   → 伺服器回應 ", code, "。可能係服務未起好，或者網址路徑錯");
+    }
+    return (false);
 }
 
 void SendTick() {
@@ -87,8 +138,8 @@ void ShowStatus() {
     string conn = (g_quoteLag > 180)
                   ? "⚠️ 券商報價停滯 " + IntegerToString(g_quoteLag) + " 秒"
                   : "✅ 券商報價正常";
-    Comment("TyLove 報價推送 v1.1\n",
-            "──────────────────\n",
+    Comment("🟦 TyLove 報價推送  ", EA_VERSION, "\n",
+            "══════════════════\n",
             g_sym, "　M", BarMinutes, "\n",
             "報價成功 ", g_okTicks, " 次\n",
             "K線成功 ", g_okBars, " 次　失敗 ", g_fail, " 次\n",
@@ -105,10 +156,24 @@ int OnInit() {
     // MT4 時間戳係「券商 server 時間」，換成真 UTC 先唔會搞亂時段判斷
     g_tzOffset = (int)(MathRound((TimeCurrent() - TimeGMT()) / 900.0) * 900);
 
-    Print("=================== TyLove 報價推送 v1.1 ===================");
+    Print("============== TyLove 報價推送  ", EA_VERSION, " ==============");
+
+    // ⚠️ WebRequest 一定要有 https://，冇嘅話一定失敗
+    g_base = NormalizeBase(API_BASE);
+    if (StringLen(g_base) == 0) {
+        Print("❌ API_BASE 係空！請填入你 Railway 網址。");
+        Print("   例如：https://tylovetrading-production.up.railway.app");
+        return (INIT_PARAMETERS_INCORRECT);
+    }
+    if (g_base != API_BASE)
+        Print("🔧 API_BASE 冇協定，已自動修正：", API_BASE, " → ", g_base);
+
     Print("品種 ", g_sym, "　週期 M", BarMinutes, "　每 ", TickSeconds, " 秒推一次");
     Print("券商 server 同 UTC 相差 ", g_tzOffset / 3600.0, " 小時");
-    Print("目標 ", API_BASE);
+    Print("目標 ", g_base);
+    Print("⚠️ 如果一直收唔到數據，去「工具 → 選項 → 智能交易系統 →"
+          " 允許 WebRequest 網址」加入呢個：");
+    Print("   ", g_base);
     Print("===========================================================");
 
     SendBars(BarCountFull);
@@ -133,7 +198,7 @@ void OnTimer() {
     // ⚠️ 一定要用 TimeLocal()（電腦時鐘）計時。
     //    v1.0 用咗 TimeCurrent() —— 佢係「最後報價時間」，
     //    市靜嗰陣會凍結，令 K 線永遠唔重推 →
-    //    網站收唔到新 K 線變紅，但 EA 照顯示成功。呢個就係 v1.1 修嘅 bug。
+    //    網站收唔到新 K 線變紅，但 EA 照顯示成功。呢個就係 v2.0 修嘅 bug。
     if (TimeLocal() - g_lastBarPush >= PushBarsEveryMin * 60) {
         g_lastBarPush = TimeLocal();
         SendBars(BarCountQuick);

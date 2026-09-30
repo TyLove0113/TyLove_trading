@@ -55,8 +55,11 @@ def init_db() -> None:
                 pnl_usd         REAL,
                 followed        TEXT NOT NULL DEFAULT 'yes',
                 note            TEXT,
-                status          TEXT NOT NULL DEFAULT 'open'
+                status          TEXT NOT NULL DEFAULT 'open',
+    data_source     TEXT          -- mt4 = 券商真實報價 / yfin = 期貨延遲
+
             )""")
+        _migrate(c)
         c.execute("CREATE INDEX IF NOT EXISTS ix_gt_status ON gold_trades(status)")
         c.execute("CREATE INDEX IF NOT EXISTS ix_gt_opened ON gold_trades(opened_at)")
 def _f(v):
@@ -67,6 +70,18 @@ def _f(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+
+def _migrate(c) -> None:
+    """為舊資料庫補新欄位（SQLite 唔支援 ADD COLUMN IF NOT EXISTS）。"""
+    try:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(gold_trades)")}
+        if "data_source" not in cols:
+            c.execute("ALTER TABLE gold_trades ADD COLUMN data_source TEXT")
+            log.info("已為 gold_trades 加入 data_source 欄位")
+    except sqlite3.Error:
+        log.exception("遷移失敗")
 
 
 def add_trade(d: dict) -> int:
@@ -87,14 +102,15 @@ def add_trade(d: dict) -> int:
             """INSERT INTO gold_trades
                (opened_at, direction, signal_entry, actual_entry,
                 signal_stop, signal_target, actual_stop, lot,
-                spread_at_entry, followed, note, status)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?, 'open')""",
+                spread_at_entry, followed, note, status, data_source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?, 'open', ?)""",
             ((d.get("opened_at") or "").strip() or _now(), direction,
              _f(d.get("signal_entry")), actual,
              _f(d.get("signal_stop")), _f(d.get("signal_target")),
              _f(d.get("actual_stop")), _f(d.get("lot")),
              _f(d.get("spread_at_entry")), followed,
-             (d.get("note") or "").strip() or None))
+             (d.get("note") or "").strip() or None,
+             (d.get("data_source") or "").strip() or None))
         return int(cur.lastrowid)
 
 

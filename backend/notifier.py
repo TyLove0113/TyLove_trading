@@ -268,8 +268,15 @@ def fmt_gold_signal(g: dict) -> str:
     def s(v):                       # 換算成 MT4 現貨等價位
         return round(float(v) - off, 2)
 
+    # 2026-09-30：標明數據源 —— 用戶要知呢個訊號係用券商真實報價
+    # 定係延遲 10–20 分鐘嘅 yfinance 期貨計出嚟，先判斷到入場時機。
+    _src = ("\U0001f7e2 數據源：券商真實報價（MT4）同步"
+            if g.get("live_feed") else
+            "\U0001f7e1 數據源：yfinance 期貨 —— 延遲 10–20 分鐘，"
+            "入場價位僅供參考")
     lines = [
         f"*【黃金 XAU/USD】{arrow}*",
+        _src,
         f"訊號 K 線 {g['time']}（香港時間）",
         "─" * 18,
     ]
@@ -312,7 +319,10 @@ def fmt_gold_signal(g: dict) -> str:
            f"{g.get('risk_pct_actual', 0):g}% 本金。止蝕太闊，建議跳過呢筆。"]
           if g.get("risk_warn") else []),
         f"ATR(14) = {g['atr']}（{g['atr_pct']}% of 價格）",
-        f"⏱ 數據時間距今 {age_txt}（正式訊號要等 K 線收盤）",
+        f"📊 分析用 K 線 {g['time']} 開（15 分鐘後收盤）",
+        # 2026-09-29：舊版寫「數據時間距今 X 分鐘」，但 X 係量度去 K 線「開盤」
+        # 嘅時間，唔係真正延遲 —— 令人以為遲咗 15 分鐘。真正延遲係「收盤到發出」。
+        f"⏱ *真正延遲* {max(0.0, (age or 0) - 15):.1f} 分鐘（K 線收盤 → 系統發出）",
         "",
         "理由：" + "；".join(g.get("reasons", [])[:3]),
         "",
@@ -331,7 +341,10 @@ def fmt_gold_early(a: dict) -> str:
     px = round(float(a["price"]) - off, 2)
     return "\n".join([
         f"*【黃金 XAU/USD】⚡ 即時預警 — {arrow}*",
-        f"時間 {a['time']}（香港時間）",
+        ("\U0001f7e2 數據源：券商真實報價（MT4）" if a.get("live_feed")
+         else "\U0001f7e1 數據源：yfinance 期貨（延遲 10–20 分鐘）"),
+        f"⏰ 偵測時刻 *{a.get('detected', a['time'])}*（香港時間）",
+        f"📊 所屬 K 線 {a['time']} – {a.get('bar_window', '')}",
         f"突破位 *{lvl}*　現價 *{px}*",
         f"（已穿 {abs(a['diff']):.2f} 美元）",
         "─" * 18,

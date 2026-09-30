@@ -19,6 +19,10 @@ import config
 SKIP = {"sqlite_sequence"}
 
 
+# 自動收集嘅價格數據（唔係用戶嘅交易記錄）
+_FEED_TABLES = {"feed_ticks", "feed_bars"}
+
+
 def _conn() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(str(config.DB_PATH)) or ".", exist_ok=True)
     c = sqlite3.connect(str(config.DB_PATH))
@@ -39,12 +43,20 @@ def db_status() -> dict:
     except Exception:  # noqa: BLE001
         pass
     total = sum(counts.values())
+    # 2026-09-30：原本只報 total_rows，但佢包埋 feed_ticks / feed_bars
+    # 嘅報價數據 —— 用戶見到「555 筆」會以為係自己嘅交易記錄，
+    # 其實大部分係自動收集嘅價格。所以分開兩類報。
+    feed_rows = sum(n for t, n in counts.items() if t in _FEED_TABLES)
+    record_rows = sum(n for t, n in counts.items() if t not in _FEED_TABLES)
     return {
         "path": path,
         "persistent": persistent,
         "size_kb": round(size / 1024, 1),
         "counts": counts,
         "total_rows": total,
+        "record_rows": record_rows,
+        "feed_rows": feed_rows,
+        "records": {t: n for t, n in counts.items() if t not in _FEED_TABLES},
         "hint": ("✅ 資料庫喺 Volume 上面，重新部署唔會清空"
                  if persistent else
                  "🚨 資料庫唔喺 Volume 上面！每次更新程式都會清空所有記錄。"

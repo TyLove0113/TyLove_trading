@@ -280,7 +280,9 @@ def _feed_auth() -> bool:
 def gold_feed_status():
     """真實報價接收狀態 —— 畀網頁顯示「EA 連線中／斷線」。"""
     import feed
-    return jsonify(feed.status())
+    st = feed.status()
+    st["archive"] = feed.archive()
+    return jsonify(st)
 
 
 @app.route("/api/gold/tick", methods=["POST"])
@@ -379,12 +381,22 @@ def api_db_status():
 def api_backup():
     """匯出所有記錄做 JSON 檔案下載。"""
     import backup
+    from urllib.parse import quote
     data = backup.export_all()
-    name = "TyLove備份_" + data["exported_at"][:10] + ".json"
+    day = data["exported_at"][:10]
+    ascii_name = f"TyLove_backup_{day}.json"
+    pretty = f"TyLove備份_{day}.json"
     return Response(
         json.dumps(data, ensure_ascii=False, indent=1),
         mimetype="application/json; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        headers={
+            # 2026-09-30：原本只用中文檔名，部分瀏覽器（尤其手機）
+            # 會因為檔名含非 ASCII 字元而靜靜地唔下載，用戶只見到「冇反應」。
+            # 所以同時畀 ASCII 檔名 + RFC 5987 編碼嘅中文名。
+            "Content-Disposition":
+                f"attachment; filename=\"{ascii_name}\"; "
+                f"filename*=UTF-8''{quote(pretty)}",
+        })
 
 
 @app.route("/api/restore", methods=["POST"])

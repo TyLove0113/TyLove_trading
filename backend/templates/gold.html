@@ -162,6 +162,8 @@
       <button id="jSaveBtn" onclick="saveJournal()" class="text-sm px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">儲存記錄</button>
       <button id="jCancelBtn" onclick="cancelEdit()" class="hidden text-sm px-3 py-2 rounded-lg bg-slate-600 hover:bg-slate-500">取消編輯</button>
       <button onclick="prefillFromSignal()" class="text-sm px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600">由最新訊號填入</button>
+      <input type="hidden" id="jDataSource">
+      <span id="jSrcTag" class="text-xs ml-2 text-slate-400"></span>
       <span id="jMsg" class="text-xs ml-2"></span>
     </div>
   </details>
@@ -177,40 +179,55 @@ async function loadDbStatus() {
   if (!bar) return;
   try {
     const d = await (await fetch('/api/db-status')).json();
-    const n = d.total_rows;
     bar.classList.remove('hidden');
+    const rec = d.record_rows || 0;
+    const feed = d.feed_rows || 0;
+    const labels = {gold_trades:'交易日誌', positions:'持倉', signals:'港股訊號',
+                    gold_signals:'黃金訊號', gold_alerts:'預警', settings:'設定',
+                    equity:'資金曲線'};
+    const detail = Object.entries(d.records || {})
+      .filter(function(kv){ return kv[1] > 0; })
+      .map(function(kv){ return (labels[kv[0]] || kv[0]) + ' ' + kv[1]; })
+      .join('・') || '（暫時冇記錄）';
+
+    const dl = '<a href="/api/backup" download class="underline font-semibold">'
+      + '\u2b07\ufe0f \u532f\u51fa\u5099\u4efd</a>';
+    const up = '<button onclick="document.getElementById(\'restoreFile\').click()" '
+      + 'class="underline font-semibold">\u2b06\ufe0f \u532f\u5165</button>'
+      + '<input type="file" id="restoreFile" accept=".json" class="hidden" '
+      + 'onchange="doRestore(this)">';
+
     if (d.persistent) {
       bar.style.background = '#052e16';
       bar.style.border = '1px solid #166534';
       bar.style.color = '#86efac';
-      bar.innerHTML = '✅ <b>記錄會自動保存</b> —— 資料庫喺 Volume 上面'
-        + '（共 ' + n + ' 筆，' + d.size_kb + ' KB）'
-        + '　<button onclick="doBackup()" class="underline">匯出備份</button>'
-        + '　<button onclick="document.getElementById(\'restoreFile\').click()" '
-        + 'class="underline">匯入</button>'
-        + '<input type="file" id="restoreFile" accept=".json" class="hidden" '
-        + 'onchange="doRestore(this)">';
+      bar.innerHTML = '\u2705 <b>\u8a18\u9304\u6703\u81ea\u52d5\u4fdd\u5b58</b>'
+        + ' \u2014\u2014 \u8cc7\u6599\u5eab\u55ba Volume \u4e0a\u9762'
+        + '<div class="mt-1 text-xs opacity-90">\u4f60\u5605\u8a18\u9304 <b>'
+        + rec + ' \u7b46</b>\uff1a' + detail
+        + '\uff08\u53e6\u52a0\u81ea\u52d5\u6536\u96c6\u5605\u5831\u50f9\u6578\u64da '
+        + feed + ' \u7b46\uff09</div>'
+        + '<div class="mt-2 text-xs opacity-90">' + d.size_kb + ' KB</div>'
+        + '<div class="mt-2">' + dl + '\u3000' + up + '</div>';
       return;
     }
     bar.style.background = '#2A1215';
     bar.style.border = '1px solid #7F1D1D';
     bar.style.color = '#fca5a5';
-    bar.innerHTML = '🚨 <b>記錄唔會自動保存！</b>每次更新程式都會清空所有記錄（目前 '
-      + n + ' 筆）。'
-      + '<div class="mt-2 text-xs opacity-90">做法：Railway → 服務 → Settings → '
-      + 'Volumes 掛一個去 <code>/data</code>，再喺 Variables 加 '
-      + '<code>DB_PATH=/data/tylove.db</code>。</div>'
-      + '<div class="mt-2"><b>未搞好之前，落完單記得撳：</b></div>'
-      + '<div class="mt-2 flex gap-2 flex-wrap">'
-      + '<button onclick="doBackup()" class="px-3 py-1.5 rounded-lg bg-red-800 hover:bg-red-700">⬇️ 匯出備份</button>'
-      + '<button onclick="document.getElementById(\'restoreFile\').click()" '
-      + 'class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">⬆️ 匯入備份</button>'
-      + '</div>'
-      + '<input type="file" id="restoreFile" accept=".json" class="hidden" '
-      + 'onchange="doRestore(this)">';
+    bar.innerHTML = '\ud83d\udea8 <b>\u8a18\u9304\u5514\u6703\u81ea\u52d5\u4fdd\u5b58\uff01</b>'
+      + '\u6bcf\u6b21\u66f4\u65b0\u7a0b\u5f0f\u90fd\u6703\u6e05\u7a7a\u6240\u6709\u8a18\u9304'
+      + '<div class="mt-1 text-xs opacity-90">\u76ee\u524d\u4f60\u5605\u8a18\u9304 <b>'
+      + rec + ' \u7b46</b>\uff1a' + detail + '</div>'
+      + '<div class="mt-2 text-xs opacity-90">\u505a\u6cd5\uff1aRailway \u2192 '
+      + '\u670d\u52d9 \u2192 Settings \u2192 Volumes \u639b\u4e00\u500b\u53bb '
+      + '<code>/data</code>\uff0c\u518d\u55ba Variables \u52a0 '
+      + '<code>DB_PATH=/data/tylove.db</code>\u3002</div>'
+      + '<div class="mt-2"><b>\u672a\u641e\u597d\u4e4b\u524d\uff0c\u843d\u5b8c\u55ae'
+      + '\u8a18\u5f97\u64f3\uff1a</b></div>'
+      + '<div class="mt-2">' + dl + '\u3000' + up + '</div>';
   } catch (e) {
     bar.classList.remove('hidden');
-    bar.textContent = '（讀唔到資料庫狀態）';
+    bar.textContent = '\uff08\u8b80\u5514\u5230\u8cc7\u6599\u5eab\u72c0\u614b\uff09';
   }
 }
 
@@ -310,6 +327,7 @@ function jList(ts) {
       <td class="pr-2 whitespace-nowrap">${t.direction === 'long' ? '🟢 多' : '🔴 空'}</td>
       <td class="pr-2 text-right">${jFmt(t.signal_entry)}</td>
       <td class="pr-2 text-right font-semibold">${jFmt(t.actual_entry)}</td>
+      <td class="pr-2 whitespace-nowrap">${{mt4:'\U0001f7e2',yfin:'\U0001f7e1'}[t.data_source] || ''}</td>
       <td class="pr-2 text-right">${slip}</td>
       <td class="pr-2 text-right">${jFmt(t.lot)}</td>
       <td class="pr-2 text-right">${jFmt(t.spread_at_entry)}</td>
@@ -357,6 +375,11 @@ function prefillFromSignal() {
                                               && t.spread_at_entry !== undefined);
   $('jSpread').value = last ? Number(last.spread_at_entry).toFixed(2) : '';
   $('jMsg').textContent = '✅ 已由最新訊號填入 —— 記得填「你實際入場價」同「實際點差」';
+  // 2026-09-30：記低呢個訊號係用邊個數據源，方便日後分析
+  $('jDataSource').value = g.live_feed ? 'mt4' : 'yfin';
+  $('jSrcTag').textContent = g.live_feed
+    ? '\U0001f7e2 數據源：券商真實報價' : '\U0001f7e1 數據源：yfinance';
+
 }
 
 // 編輯模式：jEditId 有值 = 改緊舊記錄；null = 新增
@@ -414,6 +437,7 @@ async function saveJournal() {
     spread_at_entry: jNum('jSpread'),
     note: $('jNote').value.trim() || null
   };
+  body.data_source = $('jDataSource').value || null;
   const url = jEditId ? ('/api/gold/journal/' + jEditId) : '/api/gold/journal';
   const d = await (await fetch(url, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -580,6 +604,20 @@ async function loadFeed(){
       const src = d.source ? `（來源：${d.source}）` : '';
       bar.innerHTML = `✅ <b>用緊你券商嘅真實報價</b>${src}`
         + ` — 價位同你 MT4 完全一致，唔需要基準校正${age}`;
+  // 2026-09-30：顯示券商真實數據累積幾多日（呢個決定幾時可以做真回測）
+  const arc = d.archive || {};
+  if (arc.ok && arc.bars > 0) {
+    const rd = arc.bars_days || 0;
+    const cls = rd >= 14 ? '#86efac' : '#fbbf24';
+    const msg = rd >= 14
+      ? '已有 ' + rd + ' 日真實數據 —— <b>足夠做一次回測</b>'
+      : '暫時 ' + rd + ' 日（建議累積到 14 日先回測）';
+    bar.innerHTML += '<div class="mt-1 text-xs" style="color:' + cls
+      + '">📊 券商數據累積：' + arc.bars + ' 支 K 線'
+      + (arc.bars_from ? '（由 ' + arc.bars_from + ' 開始）' : '')
+      + '　' + arc.ticks + ' 個報價　→ ' + msg + '</div>';
+  }
+
       $('sym') && ($('sym').textContent = d.symbol || 'XAUUSD');
     } else {
       bar.style.background = '#2A1215';

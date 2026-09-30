@@ -93,7 +93,14 @@ GOLD_OZ_PER_LOT = float(os.getenv("GOLD_OZ_PER_LOT", "100"))   # 1 手 = 100 盎
 GOLD_EQUITY_USD = float(os.getenv("GOLD_EQUITY_USD", "500"))
 GOLD_RISK_PCT = float(os.getenv("GOLD_RISK_PCT", "1.0"))
 
-# 策略參數（對應回測：Donchian 突破 1.0×ATR 止蝕 / 3.0×ATR 目標）
+# 策略參數（Donchian 突破）
+# 2026-09-29 回測結論：維持 1.0×ATR 止蝕。
+#   曾試 1.5×ATR（因 09-25 三筆連續被回吐掃損），但完整回測顯示
+#   喺實盤 M15 週期上反而更差：
+#     樣本外 PF  1.0×=1.24 / 1.5×=1.08　期望值 +1.57R / +0.70R
+#   H1 長樣本則相反（1.5 較好）→ 兩個週期結論相反 = 微調無意義。
+#   真正問題：PF 喺樣本內外由 0.87 搖到 1.59，即策略本身冇穩定優勢。
+#   所以唔應該再喺噪音上面調參數 —— 應該累積實測數據再判斷。
 GOLD_BREAKOUT_BARS = int(os.getenv("GOLD_BREAKOUT_BARS", "20"))
 GOLD_STOP_ATR = float(os.getenv("GOLD_STOP_ATR", "1.0"))
 GOLD_TARGET_ATR = float(os.getenv("GOLD_TARGET_ATR", "3.0"))
@@ -126,6 +133,17 @@ GOLD_TREND_FILTER = int(os.getenv("GOLD_TREND_FILTER", "1"))
 
 # ② 追高警告門檻：入場價離突破位超過幾個 ATR 就標「已追高」。
 #    0.5 = 半個 ATR。設大啲（例如 2）等於唔理。
+# ── 券商真實報價：保留幾多 ──────────────────────────────
+# 2026-09-30：原本 KEEP_BARS=3000（只 31 日）、prune_ticks(keep=5000)
+# （只 6.9 小時）—— tick 數據每 7 個鐘就畀人刪走，永遠儲唔到長期記錄。
+# 你嘅目標係累積真實 MT4 數據做回測，所以兩個都要大幅放寬。
+#
+# K 線：M15 一日 96 支 → 20 萬支 ≈ 5.7 年（約 20–30 MB，好抵）
+# Tick：一日約 17,280 個 → 150 萬個 ≈ 87 日（約 150–200 MB）
+# 如果你 Railway Volume 空間緊，可以調細個 tick 數；K 線唔建議細過 5 萬。
+KEEP_BARS = int(os.getenv("KEEP_BARS", "200000"))
+KEEP_TICKS = int(os.getenv("KEEP_TICKS", "1500000"))
+
 GOLD_MAX_CHASE_ATR = float(os.getenv("GOLD_MAX_CHASE_ATR", "0.5"))
 
 # ③ 真實報價接收（Option A/C）—— 由你 MT4 EA 或 MT5 Python 推送過嚟

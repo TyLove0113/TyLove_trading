@@ -7,7 +7,7 @@
 #property strict
 
 //================= 你只需要改呢兩行 =================
-extern string API_BASE         = "tylovetrading-production.up.railway.app";
+extern string API_BASE         = "https://tylovetrading-production.up.railway.app";
 extern string FEED_TOKEN       = "TyLove_Gold";
 //===================================================
 

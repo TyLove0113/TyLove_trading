@@ -3,7 +3,7 @@
 =========================================================
 策略：Donchian 20 突破（同回測報告用嘅同一組規則）
   · 進場：M15 收盤突破前 20 支 K 線高位（做多）／低位（做空）
-  · 止蝕：1.0 × ATR(14)
+  · 止蝕：1.0 × ATR(14)　目標 3.0 × ATR(14)（盈虧比 1:3）
   · 目標：3.0 × ATR(14)
   · 每日最多 1 筆，日終平倉（即日鮮，唔持過夜）
 
@@ -317,9 +317,10 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     oz = round(lot * config.GOLD_OZ_PER_LOT, 2)
     risk_usd = round((stop_dist + config.GOLD_SPREAD_USD) * oz, 2)
     risk_pct_actual = round(risk_usd / eq * 100, 2) if eq else 0.0
-    # 你本金細 + 最細手數 0.01（= 1 盎司），所以風險完全由止蝕距離決定。
-    # 連最細手數都要蝕超過 2% 本金 → 止蝕太闊，呢筆應該跳過。
-    risk_warn = bool(eq and risk_pct_actual > max(rp * 1.5, 2.0))
+    # 你本金細（US$500）+ 最細手數 0.01（= 1 盎司），風險完全由止蝕距離決定。
+    # 1.0×ATR 之下：ATR 7（正常）風險約 1.5%；ATR 15（大波動）約 3.1%。
+    # 所以警報線定喺 3%：只有真正大波動日先響，嗰陣風險已經超標。
+    risk_warn = bool(eq and risk_pct_actual > max(rp * 1.5, 3.0))
 
     out.update({
         "has_signal": True,
@@ -404,8 +405,15 @@ def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
         c.execute("INSERT INTO gold_alerts(k, ts, direction, price) VALUES(?,?,?,?)",
                   (key, ts, direction, price))
 
+    now_hk = datetime.now(ZoneInfo(config.HK_TZ))
     info = {"direction": direction, "level": round(level, 2), "price": round(price, 2),
             "time": ts, "diff": round(price - level, 2),
+            # 2026-09-29：新增真正嘅偵測時刻。
+            # 舊版只顯示 K 線開盤時間（例如 19:00），但偵測係喺 19:12 發生，
+            # 用家睇到「19:00」就以為遲咗 12 分鐘 —— 其實個通知係即時嘅。
+            "detected": now_hk.strftime("%Y-%m-%d %H:%M:%S"),
+            "bar_window": (t + pd.Timedelta(minutes=15)).strftime("%H:%M"),
+            "live_feed": _live(),
             "spot_offset": config.GOLD_SPOT_OFFSET, "data_age_min": 0.0}
     if push:
         try:

@@ -177,10 +177,13 @@
       </button>
       <input type="file" id="ocrFile" accept="image/*" class="hidden" onchange="jOcr(this)">
       <span id="ocrMsg" class="text-xs text-slate-400"></span>
+      <span id="ocrStat" class="text-xs"></span>
     </div>
     <div class="text-[11px] text-slate-500 mt-1.5">
       讀到嘅數字會開一張「草稿」—— <b>唔會直接入帳</b>，你核對完撳「✅ 確認入帳」先算。
     </div>
+    <div id="ocrErr" class="hidden mt-2 p-2 rounded text-[11px]"
+         style="background:#2A1215;border:1px solid #7F1D1D;color:#fca5a5"></div>
   </div>
   <div id="jDraft" class="hidden mb-4"></div>
   <div id="jList" class="text-xs text-slate-400">載入中…</div>
@@ -275,6 +278,30 @@ const $ = id => document.getElementById(id);
 // ==================== 待確認草稿 ====================
 // 2026-09-30：MT4 自動讀入嘅成交會放喺度等你核對。
 // 你撳「確認」先正式入帳，撳「丟棄」就刪走 —— 系統唔會代你決定。
+async function jOcrStatus(){
+  try {
+    const d = await (await fetch('/api/gold/ocr-status')).json();
+    const st = $('ocrStat'), er = $('ocrErr');
+    if (d.available) {
+      st.textContent = '✅ OCR 已啟用（' + d.engine + '）';
+      st.style.color = '#4ade80';
+      er.classList.add('hidden');
+    } else {
+      st.textContent = '❌ OCR 未啟用';
+      st.style.color = '#f87171';
+      const rows = Object.entries(d.errors || {})
+        .map(([k,v]) => '<div><b>' + k + '</b>：' + v + '</div>').join('');
+      er.innerHTML = '<b>診斷資料（截圖俾我睇）</b>'
+        + '<div>Pillow ' + (d.pillow ? '✅' : '❌')
+        + '／rapidocr ' + (d.rapidocr_import ? '✅' : '❌')
+        + '／pytesseract ' + (d.tesseract_import ? '✅' : '❌')
+        + '／tesseract 執行檔 ' + (d.tesseract_binary ? '✅' : '❌') + '</div>'
+        + rows + '<div style="margin-top:6px">' + (d.hint || '') + '</div>';
+      er.classList.remove('hidden');
+    }
+  } catch (e) { /* 靜靜咁算 */ }
+}
+
 async function jOcr(input){
   const f = input.files && input.files[0];
   if (!f) return;
@@ -742,6 +769,7 @@ async function loadFeed(){
 
 refresh();
 loadFeed();
+jOcrStatus();
 setInterval(refresh, 60000);
 setInterval(loadFeed, 30000);
 loadDbStatus();

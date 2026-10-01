@@ -1,0 +1,18 @@
+# Railway 部署設定（2026-10-01 加）
+#
+# 為何要呢個檔：截圖 OCR 用嘅 rapidocr 依賴 opencv，而 opencv 需要
+# 系統函式庫 libGL.so.1 —— Railway 嘅精簡容器冇，所以 import cv2 會爆
+# 「libGL.so.1: cannot open shared object file」，令 OCR 顯示「未啟用」。
+#
+# ⚠️ 呢個檔淨係加系統函式庫，唔會覆寫 railway.json 嘅 build / start 指令。
+#
+# 同時裝 tesseract 做後備：rapidocr 仲有問題時系統會自動退去 tesseract。
+[phases.setup]
+aptPkgs = [
+    "libgl1",            # opencv 必需（rapidocr）
+    "libglib2.0-0",      # opencv 必需
+    "libsm6",            # opencv 影像編解碼
+    "libxext6",
+    "tesseract-ocr",     # 後備 OCR 引擎
+    "tesseract-ocr-eng", # 英文＋數字（MT4 介面係英文）
+]

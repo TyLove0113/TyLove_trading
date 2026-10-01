@@ -27,17 +27,32 @@ try:
 except Exception:  # noqa: BLE001
     _PIL = False
 
+# 2026-10-01：原本錯誤被靜靜咁吞咗，用戶只見到「OCR 未啟用」但唔知原因。
+# 而家記住真實錯誤，喺 status() 度顯示出嚟，方便診斷（尤其 Railway 部署）。
+_ERR = {}
+
 try:
     from rapidocr_onnxruntime import RapidOCR
     _RAPID = True
-except Exception:  # noqa: BLE001
+except Exception as e:  # noqa: BLE001
     _RAPID = False
+    _ERR["rapidocr"] = f"{type(e).__name__}: {e}"
 
 try:
     import pytesseract
     _TESS = True
-except Exception:  # noqa: BLE001
+except Exception as e:  # noqa: BLE001
     _TESS = False
+    _ERR["pytesseract"] = f"{type(e).__name__}: {e}"
+
+# tesseract 係「Python 包裝 + 系統執行檔」兩層，包裝裝好但執行檔唔喺度都會死。
+_TESS_BIN = False
+if _TESS:
+    try:
+        pytesseract.get_tesseract_version()
+        _TESS_BIN = True
+    except Exception as e:  # noqa: BLE001
+        _ERR["tesseract_bin"] = f"{type(e).__name__}: {e}"
 
 
 _rapid_engine = None
@@ -57,7 +72,7 @@ def _engine():
 def available() -> bool:
     if _engine() is not None:
         return True
-    if _PIL and _TESS:
+    if _PIL and _TESS and _TESS_BIN:
         try:
             pytesseract.get_tesseract_version()
             return True
@@ -67,13 +82,33 @@ def available() -> bool:
 
 
 def status() -> dict:
+    """回報 OCR 狀態 + 真實錯誤，方便喺 Railway 診斷。"""
+    eng = None
+    if _engine() is not None:
+        eng = "rapidocr"
+    elif _TESS and _TESS_BIN:
+        eng = "tesseract"
+    ready = eng is not None
+    if ready:
+        hint = f"OCR 已就緒（{eng}）。"
+    elif not _PIL:
+        hint = "冇裝 Pillow，無法讀圖。"
+    elif not _RAPID and not _TESS:
+        hint = ("兩個引擎都匯入失敗。睇下面 errors 嘅確實原因 —— "
+                "最常見係 cv2 缺 libGL.so.1（解決：喺 Railway 加 nixpacks.toml "
+                "裝 libgl1，或者用 tesseract）。")
+    else:
+        hint = "引擎裝咗但啟動失敗，睇 errors。"
     return {
-        "available": available(),
-        "engine": "rapidocr" if _engine() is not None else ("tesseract" if _TESS else None),
+        "available": ready,
+        "engine": eng,
         "pillow": _PIL,
-        "ready": available(),
-        "hint": ("OCR 未啟用。喺 requirements.txt 加 rapidocr-onnxruntime 就會自動開。"
-                 if not available() else "OCR 已就緒。"),
+        "ready": ready,
+        "rapidocr_import": _RAPID,
+        "tesseract_import": _TESS,
+        "tesseract_binary": _TESS_BIN,
+        "errors": _ERR,
+        "hint": hint,
     }
 
 

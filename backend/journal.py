@@ -57,7 +57,8 @@ def init_db() -> None:
                 note            TEXT,
                 status          TEXT NOT NULL DEFAULT 'open',
     data_source     TEXT,         -- mt4 = 券商真實報價 / yfin = 期貨延遲
-                shot            TEXT          -- 截圖檔名（shots/ 目錄）
+                shot            TEXT,         -- 截圖檔名（shots/ 目錄）
+                ticket          TEXT          -- MT4 訂單號（截圖匯入用嚟去重）
 
             )""")
         _migrate(c)
@@ -89,6 +90,9 @@ def _migrate(c) -> None:
         if "shot" not in cols:
             c.execute("ALTER TABLE gold_trades ADD COLUMN shot TEXT")
             log.info("已為 gold_trades 加入 shot 欄位")
+        if "ticket" not in cols:
+            c.execute("ALTER TABLE gold_trades ADD COLUMN ticket TEXT")
+            log.info("已為 gold_trades 加入 ticket 欄位")
     except sqlite3.Error:
         log.exception("遷移失敗")
 
@@ -115,8 +119,8 @@ def add_trade(d: dict) -> int:
                (opened_at, direction, signal_entry, actual_entry,
                 signal_stop, signal_target, actual_stop, lot,
                 spread_at_entry, followed, note, status, data_source,
-                closed_at, exit_price, pnl_usd, shot)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                closed_at, exit_price, pnl_usd, shot, ticket)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             ((d.get("opened_at") or d.get("entered_at") or "").strip() or _now(),
              direction,
              _f(d.get("signal_entry")), actual,
@@ -129,7 +133,8 @@ def add_trade(d: dict) -> int:
              (d.get("closed_at") or "").strip() or None,
              _f(d.get("exit_price")),
              (None if d.get("pnl_usd") in (None, "") else float(d.get("pnl_usd"))),
-             (d.get("shot") or "").strip() or None))
+             (d.get("shot") or "").strip() or None,
+             (str(d.get("ticket")).strip() or None) if d.get("ticket") else None))
         return int(cur.lastrowid)
 
 
@@ -387,13 +392,18 @@ def discard(tid: int) -> bool:
 
 # ---------------------------------------------------------------- 匯入去重
 def deal_exists(ticket) -> bool:
-    """呢張 MT4 成交之前匯入過未？（防止同一張圖重複開草稿）"""
+    """呢張 MT4 成交之前匯入過未？
+
+    2026-10-01 修正：原本查獨立嘅 ocr_imported 表 —— 用戶刪走日誌記錄
+    之後，去重表仲留住張飛，所以點都話「已匯入過」，冇得重新入。
+    改為查 gold_trades 本身：**記錄冇咗 = 可以重新匯入**。
+    """
     if not ticket:
         return False
     try:
         init_db()
         with _conn() as c:
-            return c.execute("SELECT 1 FROM ocr_imported WHERE ticket=?",
+            return c.execute("SELECT 1 FROM gold_trades WHERE ticket=?",
                              (str(ticket),)).fetchone() is not None
     except sqlite3.Error:
         log.exception("查成交去重失敗")
@@ -401,16 +411,8 @@ def deal_exists(ticket) -> bool:
 
 
 def mark_deal_journal(ticket, journal_id) -> None:
-    """記低呢張成交已經匯入，連去邊張日誌。"""
-    if not ticket:
-        return
-    try:
-        init_db()
-        with _conn() as c:
-            c.execute("INSERT OR REPLACE INTO ocr_imported (ticket, journal_id, imported_at) "
-                      "VALUES (?,?,?)", (str(ticket), journal_id, _now()))
-    except sqlite3.Error:
-        log.exception("記錄成交去重失敗")
+    """保留介面；去重而家靠 gold_trades.ticket，唔需要另寫表。"""
+    return None
 
 
 def forget_deal(ticket) -> None:

@@ -62,6 +62,11 @@ def init_db() -> None:
             )""")
         _migrate(c)
         c.execute("CREATE INDEX IF NOT EXISTS ix_gt_status ON gold_trades(status)")
+        c.execute("""CREATE TABLE IF NOT EXISTS ocr_imported (
+                ticket TEXT PRIMARY KEY,
+                journal_id INTEGER,
+                imported_at TEXT NOT NULL
+            )""")
         c.execute("CREATE INDEX IF NOT EXISTS ix_gt_opened ON gold_trades(opened_at)")
 def _f(v):
     """安全轉 float；空白或 None 回 None。"""
@@ -378,3 +383,43 @@ def discard(tid: int) -> bool:
     except sqlite3.Error:
         log.exception("丟棄草稿失敗")
         return False
+
+
+# ---------------------------------------------------------------- 匯入去重
+def deal_exists(ticket) -> bool:
+    """呢張 MT4 成交之前匯入過未？（防止同一張圖重複開草稿）"""
+    if not ticket:
+        return False
+    try:
+        init_db()
+        with _conn() as c:
+            return c.execute("SELECT 1 FROM ocr_imported WHERE ticket=?",
+                             (str(ticket),)).fetchone() is not None
+    except sqlite3.Error:
+        log.exception("查成交去重失敗")
+        return False
+
+
+def mark_deal_journal(ticket, journal_id) -> None:
+    """記低呢張成交已經匯入，連去邊張日誌。"""
+    if not ticket:
+        return
+    try:
+        init_db()
+        with _conn() as c:
+            c.execute("INSERT OR REPLACE INTO ocr_imported (ticket, journal_id, imported_at) "
+                      "VALUES (?,?,?)", (str(ticket), journal_id, _now()))
+    except sqlite3.Error:
+        log.exception("記錄成交去重失敗")
+
+
+def forget_deal(ticket) -> None:
+    """草稿被丟棄時，釋放個 ticket，等你可以重新匯入。"""
+    if not ticket:
+        return
+    try:
+        init_db()
+        with _conn() as c:
+            c.execute("DELETE FROM ocr_imported WHERE ticket=?", (str(ticket),))
+    except sqlite3.Error:
+        log.exception("釋放成交去重失敗")

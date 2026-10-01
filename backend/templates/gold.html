@@ -310,16 +310,40 @@ async function jOcr(input){
   try {
     const fd = new FormData();
     fd.append('shot', f);
-    const r = await (await fetch('/api/gold/ocr', {method:'POST', body:fd})).json();
-    if (!r.ok) { msg.textContent = '❌ ' + (r.error || '解讀失敗'); return; }
-    if (!r.created) { msg.textContent = '⚠️ 讀唔到數字，請試下截圖時放大啲'; return; }
-    const fl = r.fields || {};
-    msg.textContent = '✅ 讀到 ' + Object.keys(fl).length + ' 個欄位 → 開咗草稿，請核對';
+    const resp = await fetch('/api/gold/ocr', {method:'POST', body:fd});
+    // ⚠️ 先讀文字再試 parse。之前直接 .json()：後端一爆就回 HTML 錯誤頁，
+    //    前端只見到 "Unexpected token '<'"，睇唔到真正原因。
+    const txt = await resp.text();
+    let r = null;
+    try { r = JSON.parse(txt); } catch (e) {
+      msg.innerHTML = '❌ 後端回咗非 JSON（HTTP ' + resp.status + '）<br>' +
+        '<span class="text-[10px] opacity-80">' + txt.slice(0, 300).replace(/</g,'&lt;') + '</span>';
+      return;
+    }
+    if (!r.ok) {
+      let extra = '';
+      if (r.diag && r.diag.errors) extra = '｜' + JSON.stringify(r.diag.errors).slice(0,200);
+      if (r.trace) extra = '｜' + r.trace.slice(-200);
+      msg.textContent = '❌ ' + (r.error || '解讀失敗') + extra;
+      return;
+    }
+    const n = (r.created || []).length;
+    if (!n) {
+      msg.textContent = '⚠️ 讀唔到成交。' + ((r.notes || [])[0] || '');
+      loadJournal();
+      return;
+    }
+    let det = (r.created || []).map(c =>
+      '#' + c.ticket + ' ' + (c.direction === 'long' ? '🟢做多' : '🔴做空') +
+      ' ' + c.lot + '手 盈虧' + c.pnl_usd).join('　');
+    msg.textContent = '✅ 讀到 ' + r.read + ' 筆，開咗 ' + n + ' 張草稿 → ' + det +
+      '　請核對後撳「確認入帳」';
     loadJournal();
   } catch (e) {
     msg.textContent = '❌ ' + e;
   } finally { input.value = ''; }
 }
+
 
 function jDrafts(ds){
   const box = $('jDraft');

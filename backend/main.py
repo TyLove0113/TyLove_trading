@@ -416,59 +416,97 @@ def _shot_dir():
 
 @app.route("/api/gold/ocr", methods=["POST"])
 def gold_ocr():
-    """上載 MT4 截圖 → OCR 讀出欄位 → 開一張草稿等你確認。
+    """上載 MT4 截圖 → OCR 讀出成交 → 每筆開一張草稿等你確認。
 
-    安全：OCR 永遠唔會直接寫入正式記錄，只會開 status='draft'。
+    2026-10-01 重寫：
+      · 真實 MT4 手機「歷史」分頁係一張表，一版通常有幾筆成交
+        → 一次過開多張草稿，唔再只讀一筆。
+      · 全程 try/except，保證永遠回 JSON。之前 OCR 一爆就回 Flask 嘅
+        HTML 錯誤頁，前端只見到 "Unexpected token '<'" —— 睇唔到真正原因。
     """
-    import os, time
-    import journal, ocr
+    import os
+    import time
+    import traceback
 
-    f = request.files.get("shot")
-    if f is None:
-        return jsonify({"ok": False, "error": "冇收到圖檔"}), 400
-    data = f.read()
-    if not data:
-        return jsonify({"ok": False, "error": "圖檔係空"}), 400
-    if len(data) > 12 * 1024 * 1024:
-        return jsonify({"ok": False, "error": "圖太大（上限 12 MB）"}), 400
+    import journal
+    import ocr
 
-    # 存圖（連埋記錄一齊保留，方便日後翻查）
-    name = time.strftime("%Y%m%d-%H%M%S") + ".png"
     try:
-        with open(os.path.join(_shot_dir(), name), "wb") as fh:
-            fh.write(data)
-    except OSError:
-        name = None
+        f = request.files.get("shot")
+        if f is None:
+            return jsonify({"ok": False, "error": "冇收到圖檔"}), 200
+        data = f.read()
+        if not data:
+            return jsonify({"ok": False, "error": "圖檔係空"}), 200
+        if len(data) > 12 * 1024 * 1024:
+            return jsonify({"ok": False, "error": "圖太大（上限 12 MB）"}), 200
 
-    res = ocr.extract(data)
-    if not res.get("ok"):
-        return jsonify({"ok": False, "error": res.get("error", "OCR 失敗"),
-                        "shot": name}), 200
+        # 存圖（連埋記錄保留，方便日後翻查）
+        name = time.strftime("%Y%m%d-%H%M%S") + ".png"
+        try:
+            with open(os.path.join(_shot_dir(), name), "wb") as fh:
+                fh.write(data)
+        except OSError:
+            app.logger.exception("存截圖失敗")
+            name = None
 
-    fl = res.get("fields") or {}
-    if not fl:
-        return jsonify({"ok": True, "created": None, "shot": name,
-                        "fields": {}, "notes": res.get("notes", []) +
-                        ["讀唔到任何數字 —— 試下截圖時放大啲，或者影埋「Open / Close」嗰幾行。"],
-                        "texts": res.get("texts", [])}), 200
+        if not ocr.available():
+            st = ocr.status()
+            return jsonify({"ok": False, "shot": name, "created": [],
+                            "error": "OCR 未就緒（引擎：%s）" % (st.get("engine"),),
+                            "diag": st}), 200
 
-    d = {
-        "direction": fl.get("direction"),
-        "actual_entry": fl.get("entry"),
-        "actual_stop": fl.get("sl"),
-        "exit_price": fl.get("exit"),
-        "pnl_usd": fl.get("profit"),
-        "lot": fl.get("lots"),
-        "data_source": "mt4",
-        "status": "draft",
-        "note": "由截圖自動讀入，請核對",
-        "shot": name,
-    }
-    tid = journal.add_trade(d)
-    return jsonify({"ok": True, "created": tid, "shot": name,
-                    "fields": fl, "confidence": res.get("confidence", {}),
-                    "notes": res.get("notes", []),
-                    "texts": res.get("texts", [])})
+        trades = ocr.extract_trades(data)
+
+        if not trades:
+            return jsonify({
+                "ok": True, "created": [], "shot": name, "count": 0,
+                "notes": ["讀唔到任何成交。確認截圖包含 MT4 嘅「歷史」分頁表格"
+                          "（要有訂單號、時間、價格嗰幾欄），同埋唔好裁得太窄。"],
+            }), 200
+
+        created, skipped = [], []
+        for t in trades:
+            d = {
+                "direction": t.get("direction"),
+                "actual_entry": t.get("actual_entry"),
+                "actual_stop": t.get("actual_stop"),
+                "signal_target": t.get("signal_target_hint"),
+                "exit_price": t.get("exit_price"),
+                "pnl_usd": t.get("profit"),
+                "lot": t.get("lots"),
+                "opened_at": t.get("opened_at"),
+                "closed_at": t.get("closed_at"),
+                "note": "MT4 成交 #%s（OCR 信心 %.0f%%）" % (
+                    t.get("ticket"), (t.get("confidence") or 0) * 100),
+                "data_source": "mt4",
+                "status": "draft",
+                "shot": name,
+            }
+            if journal.deal_exists(t.get("ticket")):
+                skipped.append(t.get("ticket"))
+                continue
+            try:
+                tid = journal.add_trade(d)
+                journal.mark_deal_journal(t.get("ticket"), tid)
+                created.append({"id": tid, "ticket": t.get("ticket"),
+                                "direction": d["direction"],
+                                "lot": d["lot"], "pnl_usd": d["pnl_usd"],
+                                "confidence": t.get("confidence")})
+            except Exception:  # noqa: BLE001
+                app.logger.exception("開草稿失敗 ticket=%s", t.get("ticket"))
+
+        return jsonify({
+            "ok": True, "created": created, "count": len(created),
+            "skipped": skipped, "shot": name,
+            "read": len(trades),
+            "notes": (["已跳過 %d 筆之前匯入過嘅成交。" % len(skipped)]
+                      if skipped else []),
+        }), 200
+    except Exception as e:  # noqa: BLE001
+        app.logger.exception("OCR 端點爆咗")
+        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, e),
+                        "trace": traceback.format_exc()[-700:]}), 200
 
 
 @app.route("/api/gold/shot/<path:name>", methods=["GET"])

@@ -9,7 +9,7 @@
 # 同時裝 tesseract 做後備：rapidocr 仲有問題時系統會自動退去 tesseract。
 [phases.setup]
 aptPkgs = [
-    "libgl1",            # opencv 必需（rapidocr）
+    "libgl1", "libgomp1",            # opencv 必需（rapidocr）
     "libglib2.0-0",      # opencv 必需
     "libsm6",            # opencv 影像編解碼
     "libxext6",

@@ -1,326 +1,273 @@
-"""MT4 截圖 OCR —— 自動讀出入場／平倉／手數／盈虧。
+"""截圖 OCR —— 讀 MT4 手機「歷史」分頁嘅成交表。
 
-引擎：rapidocr-onnxruntime（純 pip，唔需要系統套件，15 MB）。
-       冇裝就退去 pytesseract；兩個都冇時 available() = False，
-       程式照跑，只係用唔到 OCR。
+2026-10-01 重寫。原因：舊版假設截圖上面有 "Open"／"Close"／"Profit"
+呢啲標籤，但真實 MT4 手機版係一張表：
 
-點解唔用固定裁切區域（2026-09-30 決定）：
-  手機型號、字體大細、MT4 版本都會令座標飄移。rapidocr 會回傳每段
-  文字嘅**位置**，所以可以用「搵到 Open 標籤 → 攞佢右邊／同一行嘅數字」，
-  版面郁少少都唔會死。真係要精準時仍然可以用 OCR_REGIONS 覆寫。
+  訂單        時間          類型  大小  交易品種  價格      S/L       T/P
+  1628080512  2026.09.21 13:49 buy  0.05  XAUUSD  4367.08  4359.26  4377.69
+  ...（後面再接：時間、價格、庫存費、利潤）
 
-安全設計：OCR 只會開「草稿」，唔會直接寫入正式記錄 —— 一定要你確認。
+完全冇標籤。所以改為「按 y 分行、按 x 排欄、按樣式分類」。
+
+一張截圖通常有幾筆成交 —— extract_trades() 回傳 list。
+
+引擎：rapidocr（主）→ tesseract（後備）。兩個都係「文字 + 位置」，
+所以歸一化成同一種 words 格式再解析。
 """
 from __future__ import annotations
 
 import io
-import json
 import logging
-import os
 import re
 
 log = logging.getLogger("tylove.ocr")
 
+# ------------------------------------------------------------------ 引擎
 try:
-    from PIL import Image, ImageOps
+    from PIL import Image
     _PIL = True
 except Exception:  # noqa: BLE001
     _PIL = False
 
-# 2026-10-01：原本錯誤被靜靜咁吞咗，用戶只見到「OCR 未啟用」但唔知原因。
-# 而家記住真實錯誤，喺 status() 度顯示出嚟，方便診斷（尤其 Railway 部署）。
-_ERR = {}
-
+_RAPID, _RAPID_ERR = None, None
 try:
     from rapidocr_onnxruntime import RapidOCR
-    _RAPID = True
+    _RAPID_ERR = None
 except Exception as e:  # noqa: BLE001
-    _RAPID = False
-    _ERR["rapidocr"] = f"{type(e).__name__}: {e}"
+    _RAPID_ERR = f"{type(e).__name__}: {e}"
 
+_TESS = False
 try:
     import pytesseract
     _TESS = True
-except Exception as e:  # noqa: BLE001
-    _TESS = False
-    _ERR["pytesseract"] = f"{type(e).__name__}: {e}"
+except Exception:  # noqa: BLE001
+    pass
 
-# tesseract 係「Python 包裝 + 系統執行檔」兩層，包裝裝好但執行檔唔喺度都會死。
-_TESS_BIN = False
+_TESS_BIN_ERR = None
 if _TESS:
     try:
         pytesseract.get_tesseract_version()
-        _TESS_BIN = True
     except Exception as e:  # noqa: BLE001
-        _ERR["tesseract_bin"] = f"{type(e).__name__}: {e}"
+        _TESS_BIN_ERR = f"{type(e).__name__}: {e}"
+
+_rapid_obj = None
 
 
-_rapid_engine = None
+def _rapid():
+    """rapidocr 實例（第一次用先載入模型，之後重用）。"""
+    global _rapid_obj, _RAPID
+    if _rapid_obj is not None:
+        return _rapid_obj
+    if _RAPID_ERR and _RAPID is None:
+        return None
+    try:
+        _rapid_obj = RapidOCR()
+        _RAPID = True
+        return _rapid_obj
+    except Exception as e:  # noqa: BLE001
+        log.exception("rapidocr 載入失敗")
+        globals()["_RAPID_ERR"] = f"{type(e).__name__}: {e}"
+        return None
 
 
-def _engine():
-    global _rapid_engine
-    if _rapid_engine is None and _RAPID:
-        try:
-            _rapid_engine = RapidOCR()
-        except Exception:  # noqa: BLE001
-            log.exception("rapidocr 初始化失敗")
-            _rapid_engine = False
-    return _rapid_engine or None
+def _tess_ok() -> bool:
+    return bool(_TESS and not _TESS_BIN_ERR)
 
 
 def available() -> bool:
-    if _engine() is not None:
-        return True
-    if _PIL and _TESS and _TESS_BIN:
-        try:
-            pytesseract.get_tesseract_version()
-            return True
-        except Exception:  # noqa: BLE001
-            return False
-    return False
+    return _PIL and (_rapid() is not None or _tess_ok())
 
 
-def status() -> dict:
-    """回報 OCR 狀態 + 真實錯誤，方便喺 Railway 診斷。"""
-    eng = None
-    if _engine() is not None:
-        eng = "rapidocr"
-    elif _TESS and _TESS_BIN:
-        eng = "tesseract"
-    ready = eng is not None
-    if ready:
-        hint = f"OCR 已就緒（{eng}）。"
-    elif not _PIL:
-        hint = "冇裝 Pillow，無法讀圖。"
-    elif not _RAPID and not _TESS:
-        hint = ("兩個引擎都匯入失敗。睇下面 errors 嘅確實原因 —— "
-                "最常見係 cv2 缺 libGL.so.1（解決：喺 Railway 加 nixpacks.toml "
-                "裝 libgl1，或者用 tesseract）。")
-    else:
-        hint = "引擎裝咗但啟動失敗，睇 errors。"
-    return {
-        "available": ready,
-        "engine": eng,
-        "pillow": _PIL,
-        "ready": ready,
-        "rapidocr_import": _RAPID,
-        "tesseract_import": _TESS,
-        "tesseract_binary": _TESS_BIN,
-        "errors": _ERR,
-        "hint": hint,
-    }
-
-
-# ------------------------------------------------------------------ 解析
-# 標籤（全部細寫比對）→ 對應我哋嘅欄位；中英都收
-LABELS = {
-    "entry":  ["open", "open price", "entry", "入場", "開倉", "開倉價"],
-    "exit":   ["close", "close price", "exit", "平倉", "出場", "平倉價"],
-    "sl":     ["s/l", "sl", "stop loss", "止蝕", "停損"],
-    "tp":     ["t/p", "tp", "take profit", "止賺", "止盈"],
-    "profit": ["profit", "p/l", "盈虧", "盈利", "利潤"],
-    "lots":   ["volume", "lots", "lot", "size", "手數", "數量", "成交量"],
-}
-_NUM = re.compile(r"-?\d+(?:\.\d+)?")
-
-
-def _nums(text: str) -> list[float]:
-    out = []
-    for m in _NUM.findall(text or ""):
-        try:
-            out.append(float(m))
-        except ValueError:
-            continue
-    return out
-
-
-def _cy(item) -> float:
-    b = item[0]
-    return sum(p[1] for p in b) / 4.0
-
-
-def _cx(item) -> float:
-    b = item[0]
-    return sum(p[0] for p in b) / 4.0
-
-
-def _row_of(item, items, tol: float = 22.0) -> list:
-    """同一行嘅文字（垂直中心差唔多）。"""
-    y = _cy(item)
-    return [i for i in items if abs(_cy(i) - y) <= tol]
-
-
-def _digits_score(t: str) -> float:
-    """似唔似價位：4 位數 + 兩位小數（黃金大約 4000）。"""
-    v = _nums(t)
-    if not v:
-        return 0.0
-    x = abs(v[0])
-    return 1.0 if 1000 <= x <= 20000 else 0.0
-
-
-def _pick_after(label_item, items, field: str):
-    """攞標籤右邊、同一行最似嘅數字。"""
-    lx, ly = _cx(label_item), _cy(label_item)
-    box = label_item[0]
-    right_edge = max(p[0] for p in box)
-
-    # ① 標籤自己就包住數字（例：「S/L4193.00」）
-    own = _nums(label_item[1])
-    if own:
-        ok = [n for n in own if 500 <= abs(n) <= 20000]
-        if field in ("sl", "tp", "entry", "exit") and ok:
-            return ok[0]
-        if field == "profit":
-            return own[-1]
-        if field == "lots":
-            small = [n for n in own if 0.01 <= n <= 100 and n < 1]
-            if small:
-                return small[0]
-
-    # ② 同一行、喺標籤右邊嘅文字
-    cands = []
-    for it in _row_of(label_item, items):
-        if it is label_item:
-            continue
-        b = it[0]
-        left = min(p[0] for p in b)
-        if left < right_edge - 5:
-            continue
-        ns = _nums(it[1])
-        if not ns:
-            continue
-        cands.append((left, ns, it))
-    if not cands:
-        # ③ 標籤喺上、數值喺下（常見於詳情面板）
-        ly = _cy(label_item)
-        box2 = label_item[0]
-        x0 = min(p[0] for p in box2)
-        x1 = max(p[0] for p in box2)
-        below = []
-        for it in items:
-            if it is label_item:
-                continue
-            if _cy(it) <= ly + 5:
-                continue
-            if _cy(it) > ly + 90:          # 太遠，唔算同一組
-                continue
-            cx = _cx(it)
-            if not (x0 - 40 <= cx <= x1 + 120):
-                continue
-            below.append((_cy(it), _nums(it[1])))
-        below.sort(key=lambda x: x[0])
-        for _y, ns in below:
-            for n in ns:
-                if field in ("entry", "exit", "sl", "tp") and 500 <= abs(n) <= 20000:
-                    return n
-                if field == "lots" and 0.01 <= n <= 100 and n < 1:
-                    return n
-                if field == "profit":
-                    return n
+def engine() -> str | None:
+    if not _PIL:
         return None
-    cands.sort(key=lambda x: x[0])
-    for _left, ns, _it in cands:
-        if field in ("entry", "exit", "sl", "tp"):
-            for n in ns:
-                if 500 <= abs(n) <= 20000:
-                    return n
-        elif field == "lots":
-            for n in ns:
-                if 0.01 <= n <= 100 and n < 1:
-                    return n
-        else:
-            return ns[-1]
+    if _rapid() is not None:
+        return "rapidocr"
+    if _tess_ok():
+        return "tesseract"
     return None
 
 
-# ------------------------------------------------------------------ 主函數
-def _boxes(im) -> list:
-    """回傳 [(box, text, score), ...]"""
-    eng = _engine()
-    if eng is not None:
-        res, _ = eng(im)
-        return res or []
-    # fallback：tesseract（冇位置，包成假 box）
-    txt = pytesseract.image_to_string(ImageOps.autocontrast(ImageOps.grayscale(im)),
-                                      config="--psm 6")
+def status() -> dict:
+    eng = engine()
+    errs = {}
+    if _RAPID_ERR:
+        errs["rapidocr"] = _RAPID_ERR
+    if _TESS_BIN_ERR:
+        errs["tesseract_bin"] = _TESS_BIN_ERR
+    if not _PIL:
+        errs["pillow"] = "Pillow 未安裝"
+    return {
+        "available": eng is not None,
+        "engine": eng,
+        "pillow": _PIL,
+        "rapidocr_import": _RAPID_ERR is None,
+        "tesseract_import": _TESS,
+        "tesseract_binary": _tess_ok(),
+        "errors": errs,
+        "hint": ("OCR 未就緒" if eng is None else f"OCR 已就緒（{eng}）"),
+    }
+
+
+# ------------------------------------------------------------------ 讀字
+def _words(img):
+    """回傳 [(x, y, text, conf)]，兩個引擎都歸一化成同一格式。"""
+    import numpy as np
+    r = _rapid()
     out = []
-    for i, line in enumerate((txt or "").splitlines()):
-        if line.strip():
-            out.append(([[0, i * 20], [999, i * 20], [999, i * 20 + 18], [0, i * 20 + 18]],
-                        line.strip(), 0.5))
+    if r is not None:
+        res, _ = r(np.array(img))
+        for box, txt, score in (res or []):
+            xs = [p[0] for p in box]
+            ys = [p[1] for p in box]
+            out.append((min(xs), min(ys), (txt or "").strip(), float(score)))
+        return out
+    if _tess_ok():
+        import pytesseract
+        d = pytesseract.image_to_data(img, lang="eng", output_type=pytesseract.Output.DICT,
+                                      config="--psm 6")
+        for i, t in enumerate(d["text"]):
+            t = (t or "").strip()
+            if not t:
+                continue
+            conf = float(d["conf"][i]) / 100.0
+            if conf <= 0:
+                continue
+            out.append((float(d["left"][i]), float(d["top"][i]), t, conf))
     return out
 
 
-def extract(data: bytes) -> dict:
-    """由 MT4 截圖讀出交易欄位。
+# ------------------------------------------------------------------ 樣式
+_RE_TICKET = re.compile(r"^\d{9,12}$")
+_RE_DATE = re.compile(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})")
+_RE_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
+_RE_NUM = re.compile(r"^-?\d+(?:\.\d+)?$")
+_TYPE = {"buy": "long", "sell": "short", "買": "long", "賣": "short"}
 
-    只回傳**讀到**嘅嘢；讀唔到就唔出現，唔會亂填。
-    每個欄位附信心值，等草稿畫面可以標示「呢個要人手核對」。
-    """
-    if not available():
-        return {"ok": False, "error": "OCR 未啟用", "fields": {}, "confidence": {}}
+
+def _is_date(t: str) -> bool:
+    return bool(_RE_DATE.search(t))
+
+
+def _num(t: str):
+    s = t.replace(" ", "").replace(",", "").replace("−", "-")
+    if not _RE_NUM.match(s):
+        return None
     try:
-        im = Image.open(io.BytesIO(data))
-        im.load()
-        if im.width < 700:                      # 太細嘅截圖先放大，幫 OCR
-            f = 700 / im.width
-            im = im.resize((700, int(im.height * f)), Image.LANCZOS)
-        im = im.convert("RGB")
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"讀唔到圖片：{e}", "fields": {}, "confidence": {}}
+        return float(s)
+    except ValueError:
+        return None
 
-    items = _boxes(im)
-    if not items:
-        return {"ok": True, "fields": {}, "confidence": {},
-                "notes": ["完全讀唔到文字 —— 截圖可能太矇或者太暗。"],
-                "count": 0}
 
-    fields: dict = {}
-    conf: dict = {}
-    notes: list[str] = []
+def _kind(t: str) -> str:
+    """判斷一段文字係咩欄位。"""
+    s = t.strip()
+    low = s.lower().replace(" ", "")
+    if low in _TYPE or low in ("buy", "sell"):
+        return "type"
+    if _RE_TICKET.match(s):
+        return "ticket"
+    if _is_date(s):
+        return "date"
+    if _RE_TIME.fullmatch(s):
+        return "time"
+    n = _num(s)
+    if n is None:
+        if re.fullmatch(r"[A-Za-z]{3,10}", s):
+            return "symbol"
+        return "other"
+    if abs(n) < 1 and n != 0:
+        return "lots"
+    if abs(n) >= 100:
+        return "price"
+    return "small"
 
-    # 方向
-    low_all = " ".join((t or "").lower() for _, t, _ in items)
-    if "sell" in low_all or "short" in low_all:
-        fields["direction"] = "short"
-        conf["direction"] = 0.9
-    elif "buy" in low_all or "long" in low_all:
-        fields["direction"] = "long"
-        conf["direction"] = 0.9
 
-    # 逐個標籤搵值
-    for field, keys in LABELS.items():
-        if field in fields:
+def _to_hk(txt: str) -> str | None:
+    """'2026.09.21 13:49' → '2026-09-21 13:49'。"""
+    d = _RE_DATE.search(txt)
+    if not d:
+        return None
+    y, mo, da = d.group(1), d.group(2).zfill(2), d.group(3).zfill(2)
+    t = _RE_TIME.search(txt)
+    hh = f"{t.group(1).zfill(2)}:{t.group(2)}" if t else "00:00"
+    return f"{y}-{mo}-{da} {hh}"
+
+
+# ------------------------------------------------------------------ 主流程
+def extract_trades(data) -> list[dict]:
+    """由截圖抽出所有成交。data = bytes 或 PIL Image。
+
+    ⚠️ 只係「候選值」—— 一定要經用戶喺草稿度確認先入正式記錄。
+    """
+    if isinstance(data, (bytes, bytearray)):
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    else:
+        img = data.convert("RGB")
+    raw_scale = img.width / 1280.0 or 1.0
+
+    words = _words(img)
+    if not words:
+        return []
+
+    # 1) 搵「有 9–12 位訂單號」嘅行 —— 嗰啲就係成交行
+    tickets = [w for w in words if _kind(w[2]) == "ticket"]
+    if not tickets:
+        return []
+
+    tol = max(10.0, 20.0 * raw_scale)   # 同一行嘅 y 容差
+    trades = []
+    # ⚠️ 2026-10-01：原本用 id((tx,ty)) 做「已處理」標記 —— 錯。
+    #    Python 釋放咗嘅 tuple，下一個 tuple 會攞返同一個記憶體地址，
+    #    所以第 2–4 行被誤判為已處理而跳過（實測 4 筆只抽到 1 筆）。
+    #    改為用 y 座標本身做去重（同一行嘅 y 差唔會超過 tol）。
+    seen_y = []
+    for tx, ty, ttxt, tconf in sorted(tickets, key=lambda w: w[1]):
+        if any(abs(ty - y0) <= tol for y0 in seen_y):
             continue
-        for it in items:
-            low = (it[1] or "").lower().replace(" ", "")
-            if not any(k.replace(" ", "") in low for k in keys):
-                continue
-            v = _pick_after(it, items, field)
-            if v is None:
-                continue
-            if field in ("entry", "exit", "sl", "tp") and not (500 <= abs(v) <= 20000):
-                continue
-            if field == "lots" and not (0.01 <= v <= 100):
-                continue
-            fields[field] = v
-            conf[field] = round(float(it[2] or 0.5), 2)
-            break
+        seen_y.append(ty)
+        row = [w for w in words if abs(w[1] - ty) <= tol]
+        # 同一行唔可以有兩個訂單號（避免重複收行）
+        if sum(1 for w in row if _kind(w[2]) == "ticket") > 1:
+            row = [w for w in row if w[2] == ttxt or _kind(w[2]) != "ticket"]
+        row.sort(key=lambda w: w[0])
 
-    # 手數冇標籤時：搵細過 1 嘅數字（0.01 / 0.02 / 0.05 …）
-    if "lots" not in fields:
-        for _b, t, s in items:
-            for n in _nums(t):
-                if 0.01 <= n <= 0.99:
-                    fields["lots"] = n
-                    conf["lots"] = round(float(s or 0.5), 2)
-                    notes.append("手數係推測出嚟 —— 請核對。")
-                    break
-            if "lots" in fields:
-                break
+        got = {"ticket": ttxt}
+        dates, prices, extra = [], [], []
+        confs = [tconf]
+        types = []
+        for x, y, txt, cf in row:
+            k = _kind(txt)
+            confs.append(cf)
+            if k == "date":
+                dates.append(_to_hk(txt))
+            elif k == "type":
+                types.append(_TYPE.get(txt.strip().lower().replace(" ", ""), None))
+            elif k == "lots" and "lots" not in got:
+                got["lots"] = _num(txt)
+            elif k == "symbol" and txt.isupper() and "symbol" not in got:
+                got["symbol"] = txt
+            elif k == "price":
+                prices.append(_num(txt))
+            elif k == "small":
+                extra.append(_num(txt))
+            elif k == "ticket":
+                pass
+        got["direction"] = next((t for t in types if t), None)
+        got["opened_at"] = dates[0] if dates else None
+        got["closed_at"] = dates[1] if len(dates) > 1 else None
+        got["actual_entry"] = prices[0] if prices else None
+        got["actual_stop"] = prices[1] if len(prices) > 1 else None
+        got["signal_target_hint"] = prices[2] if len(prices) > 2 else None
+        got["exit_price"] = prices[3] if len(prices) > 3 else None
+        got["profit"] = extra[-1] if extra else None
+        got["confidence"] = round(min(confs), 2)
+        if got.get("actual_entry") and got.get("exit_price"):
+            trades.append(got)
+    return trades
 
-    return {"ok": True, "fields": fields, "confidence": conf, "notes": notes,
-            "count": len(items),
-            "texts": [t for _b, t, _s in items][:40]}
+
+def extract(data) -> dict:
+    """向後兼容：回傳第一筆（連 raw list）。"""
+    ts = extract_trades(data)
+    return {"trades": ts, "count": len(ts)}

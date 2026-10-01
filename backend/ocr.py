@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import config
 import io
 import logging
 import re
@@ -183,8 +184,8 @@ def _kind(t: str) -> str:
     return "small"
 
 
-def _to_hk(txt: str) -> str | None:
-    """'2026.09.21 13:49' → '2026-09-21 13:49'。"""
+def _norm_dt(txt: str) -> str | None:
+    """'2026.09.21 13:49' → '2026-09-21 13:49'（只統一格式，唔改時區）。"""
     d = _RE_DATE.search(txt)
     if not d:
         return None
@@ -192,6 +193,24 @@ def _to_hk(txt: str) -> str | None:
     t = _RE_TIME.search(txt)
     hh = f"{t.group(1).zfill(2)}:{t.group(2)}" if t else "00:00"
     return f"{y}-{mo}-{da} {hh}"
+
+
+def _to_hk(txt: str) -> str | None:
+    """MT4 伺服器時間 → 香港時間。
+
+    2026-10-01：日誌統一用香港時間（同訊號、預警、排程一致），
+    所以 OCR 讀到嘅 MT4 時間要加上 config.MT4_TZ_OFFSET。
+    之前個函數叫 _to_hk 但根本冇做轉換 —— 名不副實。
+    """
+    from datetime import datetime, timedelta
+    base = _norm_dt(txt)
+    if not base:
+        return None
+    try:
+        dt = datetime.strptime(base, "%Y-%m-%d %H:%M")
+        return (dt + timedelta(hours=config.MT4_TZ_OFFSET)).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return base
 
 
 # ------------------------------------------------------------------ 主流程
@@ -232,15 +251,43 @@ def extract_trades(data) -> list[dict]:
             row = [w for w in row if w[2] == ttxt or _kind(w[2]) != "ticket"]
         row.sort(key=lambda w: w[0])
 
+        # ⚠️ 2026-10-01：MT4 手機版價位寫成「4 290.43」（千位分隔用空格）。
+        #    rapidocr 會讀成一段，但 tesseract 會拆開 → 平倉價變 290.43（少個 4）。
+        #    呢度將「單一數字 + 後面嘅價格」合併返。
+        merged = []
+        i = 0
+        while i < len(row):
+            x, y, txt, cf = row[i]
+            if (re.fullmatch(r"[1-9]", txt.strip()) and i + 1 < len(row)
+                    and re.fullmatch(r"\d{3}\.\d{2}", row[i + 1][2].strip())):
+                merged.append((x, y, txt.strip() + row[i + 1][2].strip(),
+                               min(cf, row[i + 1][3])))
+                i += 2
+                continue
+            merged.append(row[i])
+            i += 1
+        row = merged
+
         got = {"ticket": ttxt}
         dates, prices, extra = [], [], []
+        _pending_date = None
         confs = [tconf]
         types = []
         for x, y, txt, cf in row:
             k = _kind(txt)
             confs.append(cf)
             if k == "date":
-                dates.append(_to_hk(txt))
+                # 日期同時間可能係兩段獨立文字 → 記住個日期，等時間嚟到先合併
+                if _pending_date:
+                    dates.append(_pending_date)
+                _pending_date = _to_hk(txt)
+            elif k == "time":
+                # ⚠️ 2026-10-01 修：之前完全冇呢個分支，時間被丟棄 →
+                #    所有記錄時間都變 00:00。
+                if _pending_date:
+                    _pending_date = _pending_date[:10] + " " + txt.strip().zfill(5)
+                    dates.append(_pending_date)
+                    _pending_date = None
             elif k == "type":
                 types.append(_TYPE.get(txt.strip().lower().replace(" ", ""), None))
             elif k == "lots" and "lots" not in got:
@@ -253,6 +300,8 @@ def extract_trades(data) -> list[dict]:
                 extra.append(_num(txt))
             elif k == "ticket":
                 pass
+        if _pending_date:
+            dates.append(_pending_date)
         got["direction"] = next((t for t in types if t), None)
         got["opened_at"] = dates[0] if dates else None
         got["closed_at"] = dates[1] if len(dates) > 1 else None

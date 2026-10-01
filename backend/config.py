@@ -14,6 +14,9 @@ load_dotenv(ROOT_DIR / ".env")
 load_dotenv(BASE_DIR / ".env")
 
 HK_TZ = "Asia/Hong_Kong"
+# MT4 券商伺服器時間 vs 香港時間差幾多個鐘（香港 = MT4 + 呢個數）
+# 2026-10-01 由真實成交反推：你 MT4 顯示 13:49，訊號係香港 19:30 → +6
+MT4_TZ_OFFSET = int(os.getenv("MT4_TZ_OFFSET", "6"))
 
 # ---------------------------------------------------------------- 憑證
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()

@@ -477,222 +477,43 @@ def gold_ocr():
                 "lot": t.get("lots"),
                 "opened_at": t.get("opened_at"),
                 "closed_at": t.get("closed_at"),
-                "note": "MT4 成交 #%s（OCR 信心 %.0f%%）" % (
-                    t.get("ticket"), (t.get("confidence") or 0) * 100),
+                "note": "MT4 成交 #%s（時間已轉香港時間 MT4+%dh）｜OCR 信心 %.0f%%（%s）" % (
+                    t.get("ticket"), config.MT4_TZ_OFFSET,
+                    (t.get("confidence") or 0) * 100,
+                    ocr.status().get("engine")),
                 "data_source": "mt4",
-                "status": "draft",
+                "status": "draft",          # 草稿：唔計入統計，等用戶確認
                 "shot": name,
             }
             if journal.deal_exists(t.get("ticket")):
                 skipped.append(t.get("ticket"))
                 continue
-            try:
-                tid = journal.add_trade(d)
+            tid = journal.add_trade(d)
+            if tid:
                 journal.mark_deal_journal(t.get("ticket"), tid)
-                created.append({"id": tid, "ticket": t.get("ticket"),
-                                "direction": d["direction"],
-                                "lot": d["lot"], "pnl_usd": d["pnl_usd"],
-                                "confidence": t.get("confidence")})
-            except Exception:  # noqa: BLE001
-                app.logger.exception("開草稿失敗 ticket=%s", t.get("ticket"))
-
+                created.append(tid)
+            else:
+                skipped.append(t.get("ticket"))
         return jsonify({
-            "ok": True, "created": created, "count": len(created),
-            "skipped": skipped, "shot": name,
-            "read": len(trades),
-            "notes": (["已跳過 %d 筆之前匯入過嘅成交。" % len(skipped)]
-                      if skipped else []),
+            "ok": True, "created": created, "skipped": skipped,
+            "count": len(trades),
+            "notes": (["%d 張草稿已開好，請逐張核對後確認入帳。" % len(created)]
+                      if created else
+                      ["呢 %d 筆之前已經匯入過，全部跳過。" % len(skipped)]),
         }), 200
+
     except Exception as e:  # noqa: BLE001
-        app.logger.exception("OCR 端點爆咗")
-        return jsonify({"ok": False, "error": "%s: %s" % (type(e).__name__, e),
-                        "trace": traceback.format_exc()[-700:]}), 200
-
-
-@app.route("/api/gold/shot/<path:name>", methods=["GET"])
-def gold_shot(name):
-    """睇返之前上載嘅截圖（限制喺 shots 目錄內）。"""
-    import os
-    from flask import send_from_directory
-    d = os.path.realpath(_shot_dir())
-    full = os.path.realpath(os.path.join(d, name))
-    if not full.startswith(d):
-        return jsonify({"ok": False, "error": "唔准"}), 403
-    if not os.path.exists(full):
-        return jsonify({"ok": False, "error": "冇呢張圖"}), 404
-    return send_from_directory(d, os.path.basename(full))
-
-
-@app.route("/api/gold/ocr-status", methods=["GET"])
-def gold_ocr_status():
-    import ocr
-    return jsonify({"ok": True, **ocr.status()})
-
-
-@app.route("/api/db-status", methods=["GET"])
-def api_db_status():
-    """資料庫係咪喺持久化位置 —— 網頁用嚟顯示警告橫幅。"""
-    import backup
-    return jsonify({"ok": True, **backup.db_status()})
-
-
-@app.route("/api/backup", methods=["GET"])
-def api_backup():
-    """匯出所有記錄做 JSON 檔案下載。"""
-    import backup
-    from urllib.parse import quote
-    data = backup.export_all()
-    day = data["exported_at"][:10]
-    ascii_name = f"TyLove_backup_{day}.json"
-    pretty = f"TyLove備份_{day}.json"
-    return Response(
-        json.dumps(data, ensure_ascii=False, indent=1),
-        mimetype="application/json; charset=utf-8",
-        headers={
-            # 2026-09-30：原本只用中文檔名，部分瀏覽器（尤其手機）
-            # 會因為檔名含非 ASCII 字元而靜靜地唔下載，用戶只見到「冇反應」。
-            # 所以同時畀 ASCII 檔名 + RFC 5987 編碼嘅中文名。
-            "Content-Disposition":
-                f"attachment; filename=\"{ascii_name}\"; "
-                f"filename*=UTF-8''{quote(pretty)}",
-        })
-
-
-@app.route("/api/restore", methods=["POST"])
-def api_restore():
-    """由備份 JSON 還原記錄。"""
-    import backup
-    d = request.get_json(silent=True)
-    if d is None:
-        f = request.files.get("file")
-        if f is None:
-            return jsonify({"ok": False, "error": "冇收到檔案"}), 400
-        try:
-            d = json.loads(f.read().decode("utf-8"))
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"ok": False, "error": f"讀唔到 JSON：{exc}"}), 400
-    try:
-        r = backup.import_all(d)
-    except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    log.info("還原備份：%s", r)
-    return jsonify({"ok": True, **r, "status": backup.db_status()})
-
-@app.route("/api/settings", methods=["GET", "POST"])
-def settings_api():
-    """風控參數：網頁讀取／修改，改完即時生效。"""
-    if request.method == "POST":
-        payload = request.get_json(force=True) or {}
-        try:
-            settings_store.save(payload)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-        except Exception as exc:  # noqa: BLE001
-            log.exception("儲存風控參數失敗")
-            return jsonify({"ok": False, "error": str(exc)}), 500
-        return jsonify({"ok": True, **settings_store.describe()})
-    return jsonify(settings_store.describe())
-
-
-@app.route("/api/positions", methods=["GET", "POST"])
-def positions_api():
-    from positions import close_position, open_position
-    if request.method == "POST":
-        d = request.get_json(force=True) or {}
-        try:
-            symbol = str(d["symbol"]).upper().strip()
-            entry = float(d["entry_price"])
-            qty = float(d["qty"])
-            name = d.get("name") or symbol
-            stop = float(d["stop_loss"]) if d.get("stop_loss") else None
-            t1 = float(d["target1"]) if d.get("target1") else None
-            t2 = float(d["target2"]) if d.get("target2") else None
-            atr = None
-
-            # 冇填止蝕／目標 → 自動用 ATR 幫你計（你只需要知自己幾錢入、買幾多股）
-            if stop is None or t1 is None or t2 is None:
-                try:
-                    import data_fetcher as df_mod
-                    import indicators
-                    import trade_plan
-                    daily = df_mod.fetch_daily(symbol)
-                    if len(daily) >= 60:
-                        snap = indicators.latest_snapshot(indicators.compute(daily))
-                        atr = snap.get("atr")
-                        if atr:
-                            plan = trade_plan.build_plan(symbol, name, entry, atr, 100)
-                            if plan.get("valid") is not False:
-                                stop = stop if stop is not None else plan["stop_loss"]
-                                t1 = t1 if t1 is not None else plan["target1"]
-                                t2 = t2 if t2 is not None else plan["target2"]
-                except Exception:  # noqa: BLE001
-                    log.exception("自動計止蝕止賺失敗，改用你填嘅值")
-            if stop is None:
-                return jsonify({"ok": False, "error": "無法自動計算止蝕，請自己填止蝕價"}), 400
-
-            pid = open_position(symbol, name, entry, qty, stop, t1, t2, atr, d.get("note", ""))
-            log.info("新增持倉 #%s %s 入場 %.3f × %s 股，止蝕 %.3f", pid, symbol, entry, qty, stop)
-            return jsonify({"ok": True, "id": pid, "stop_loss": stop,
-                            "target1": t1, "target2": t2, "auto": atr is not None})
-        except KeyError as exc:
-            return jsonify({"ok": False, "error": f"缺少欄位 {exc}"}), 400
-        except Exception as exc:  # noqa: BLE001
-            log.exception("新增持倉失敗")
-            return jsonify({"ok": False, "error": str(exc)}), 400
-
-    return jsonify({"open": list_open(), "closed": list_closed(30), "stats": realised_stats()})
-
-
-@app.route("/api/positions/<int:pid>/close", methods=["POST"])
-def close_api(pid):
-    from positions import close_position
-    d = request.get_json(force=True) or {}
-    close_position(pid, float(d["exit_price"]), d.get("reason", "手動平倉"))
-    return jsonify({"ok": True})
-
-
-@app.route("/api/signals")
-def signals_api():
-    return jsonify({"signals": recent_signals(60)})
-
-
-_BG_STARTED = False
-
-
-def _warn_if_not_persistent() -> None:
-    """檢查資料庫係咪喺持久化嘅位置。
-
-    呢個係最易蝕錢嘅技術問題：如果 DB 唔喺 Volume 上面，
-    Railway 每次重新部署都會清空你所有持倉同交易紀錄。
-    """
-    import config as _cfg
-    path = str(_cfg.DB_PATH)
-    if path.startswith("/data") or os.getenv("DB_PERSIST_OK") == "1":
-        log.info("資料庫位置：%s（持久化正常）", path)
-        return
-    log.warning(
-        "⚠️  資料庫位置 = %s —— 唔喺 Railway Volume 掛載點上面，"
-        "每次重新部署都會清空持倉同交易紀錄！"
-        "解決方法：Railway → 服務 → Settings → Volumes 掛一個 volume 去 /data，"
-        "再喺 Variables 加 DB_PATH=/data/tylove.db。", path)
+        app.logger.exception("OCR 失敗")
+        import traceback
+        return jsonify({
+            "ok": False, "error": "%s: %s" % (type(e).__name__, e),
+            "trace": traceback.format_exc()[-800:],
+        }), 200
 
 
 def start_background():
-    """啟動背景排程（只會啟動一次）。
-
-    無論係 `python main.py` 定係 gunicorn 匯入（main:app / dashboard:app），
-    都會自動起排程，唔會出現「網頁開得到但永遠唔掃描」嘅情況。
-    """
-    global _BG_STARTED
-    if _BG_STARTED:
-        return
-    _BG_STARTED = True
-    init_db()
-    import journal; journal.init_db()
-    _warn_if_not_persistent()
+    """啟動背景排程執行緒（模組被匯入時就會跑）。"""
     threading.Thread(target=scheduler_loop, daemon=True).start()
-    # 開機先做一次掃描，確認設定正確
-    threading.Thread(target=lambda: (time.sleep(5), job_scan("啟動掃描")), daemon=True).start()
     log.info("背景排程已啟動（掃描 %s／每 %d 分鐘監控／%s 收市提醒）",
              SCAN_TIMES, MONITOR_INTERVAL_MIN, CLOSE_REMINDER_TIME)
 

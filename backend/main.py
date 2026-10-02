@@ -414,6 +414,23 @@ def _shot_dir():
     return d
 
 
+def _hk_from_mt4(s):
+    """MT4 伺服器時間 → 香港時間。全系統唯一嘅轉換點。
+
+    2026-10-01：之前轉換散喺 ocr.py 內部，結果「日期」做咗、「時間」又
+    用原始值蓋返，出咗「備註話轉咗、實際冇轉」。而家只此一處。
+    """
+    if not s:
+        return None
+    try:
+        from datetime import datetime, timedelta
+        off = int(getattr(config, "MT4_TZ_OFFSET", 6))
+        dt = datetime.strptime(str(s).replace("T", " ")[:16], "%Y-%m-%d %H:%M")
+        return (dt + timedelta(hours=off)).strftime("%Y-%m-%d %H:%M")
+    except Exception:  # noqa: BLE001
+        return str(s)
+
+
 @app.route("/api/gold/ocr", methods=["POST"])
 def gold_ocr():
     """上載 MT4 截圖 → OCR 讀出成交 → 每筆開一張草稿等你確認。
@@ -475,10 +492,12 @@ def gold_ocr():
                 "exit_price": t.get("exit_price"),
                 "pnl_usd": t.get("profit"),
                 "lot": t.get("lots"),
-                "opened_at": t.get("opened_at"),
-                "closed_at": t.get("closed_at"),
-                "note": "MT4 成交 #%s（時間已轉香港時間 MT4+%dh）｜OCR 信心 %.0f%%（%s）" % (
-                    t.get("ticket"), config.MT4_TZ_OFFSET,
+                "opened_at": _hk_from_mt4(t.get("opened_at")),
+                "closed_at": _hk_from_mt4(t.get("closed_at")),
+                "note": "MT4 成交 #%s｜MT4 顯示 %s → 香港 %s｜OCR 信心 %.0f%%（%s）" % (
+                    t.get("ticket"),
+                    t.get("opened_at") or "?",
+                    _hk_from_mt4(t.get("opened_at")) or "?",
                     (t.get("confidence") or 0) * 100,
                     ocr.status().get("engine")),
                 "data_source": "mt4",

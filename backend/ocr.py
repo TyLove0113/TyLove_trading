@@ -139,7 +139,7 @@ def _words(img):
 
 
 # ------------------------------------------------------------------ 樣式
-_RE_TICKET = re.compile(r"^\d{9,12}$")
+_RE_TICKET = re.compile(r"^\d{9,10}$")
 _RE_DATE = re.compile(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})")
 _RE_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
 _RE_NUM = re.compile(r"^-?\d+(?:\.\d+)?$")
@@ -195,22 +195,18 @@ def _norm_dt(txt: str) -> str | None:
     return f"{y}-{mo}-{da} {hh}"
 
 
-def _to_hk(txt: str) -> str | None:
-    """MT4 伺服器時間 → 香港時間。
+def _mt4_raw(txt: str) -> str | None:
+    """只將 MT4 時間正規化，唔做時區轉換。
 
-    2026-10-01：日誌統一用香港時間（同訊號、預警、排程一致），
-    所以 OCR 讀到嘅 MT4 時間要加上 config.MT4_TZ_OFFSET。
-    之前個函數叫 _to_hk 但根本冇做轉換 —— 名不副實。
+    2026-10-01 改：時區轉換收起喺 main.py 一處做（之前散喺呢度，
+    結果條條路徑唔一致 —— 試過日期做咗、時間又用原始值蓋返）。
+    OCR 只負責如實讀出 MT4 顯示嘅時間。
     """
     from datetime import datetime, timedelta
     base = _norm_dt(txt)
     if not base:
         return None
-    try:
-        dt = datetime.strptime(base, "%Y-%m-%d %H:%M")
-        return (dt + timedelta(hours=config.MT4_TZ_OFFSET)).strftime("%Y-%m-%d %H:%M")
-    except ValueError:
-        return base
+    return base
 
 
 # ------------------------------------------------------------------ 主流程
@@ -277,16 +273,17 @@ def extract_trades(data) -> list[dict]:
             k = _kind(txt)
             confs.append(cf)
             if k == "date":
-                # 日期同時間可能係兩段獨立文字 → 記住個日期，等時間嚟到先合併
+                # 日期同時間可能係兩段獨立文字 → 記住原始日期，等時間嚟到先合併。
+                # ⚠️ 唔可以喺呢度就 _to_hk()：如果時間係另一段文字，下面
+                #    會用原始 MT4 時間覆蓋返個鐘，令 +6 轉換白做（2026-10-01 修）。
                 if _pending_date:
-                    dates.append(_pending_date)
-                _pending_date = _to_hk(txt)
+                    dates.append(_norm_dt(_pending_date))
+                _pending_date = txt.strip()
             elif k == "time":
-                # ⚠️ 2026-10-01 修：之前完全冇呢個分支，時間被丟棄 →
-                #    所有記錄時間都變 00:00。
+                # 日期 + 時間兩段 → 先合併成原始 MT4 時間，再一次過轉香港時間。
                 if _pending_date:
-                    _pending_date = _pending_date[:10] + " " + txt.strip().zfill(5)
-                    dates.append(_pending_date)
+                    raw = _pending_date[:10] + " " + txt.strip().zfill(5)
+                    dates.append(_norm_dt(raw))
                     _pending_date = None
             elif k == "type":
                 types.append(_TYPE.get(txt.strip().lower().replace(" ", ""), None))
@@ -301,7 +298,7 @@ def extract_trades(data) -> list[dict]:
             elif k == "ticket":
                 pass
         if _pending_date:
-            dates.append(_pending_date)
+            dates.append(_norm_dt(_pending_date))
         got["direction"] = next((t for t in types if t), None)
         got["opened_at"] = dates[0] if dates else None
         got["closed_at"] = dates[1] if len(dates) > 1 else None

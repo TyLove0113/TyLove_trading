@@ -123,7 +123,13 @@ def job_heartbeat():
         if not trading:
             lines += ["", "唔使理呢條訊息，佢只係話你知系統仍然活住。"]
         import notifier                    # 同其他 job 一樣，函數內匯入
-        notifier.push("\n".join(lines), channel="gold")
+        # 兩個頻道都發 —— 2026-10-03：淨係發去 gold 嘅話，一旦
+        # gold bot 設定有問題，你就永遠收唔到任何跡象。
+        for _ch in ("gold", "hk"):
+            try:
+                notifier.push("\n".join(lines), channel=_ch)
+            except Exception:  # noqa: BLE001
+                pass
         log.info("🫀 心跳已發送")
     except Exception:  # noqa: BLE001
         log.exception("心跳發送失敗")
@@ -777,8 +783,46 @@ def start_background():
     threading.Thread(target=scheduler_loop, daemon=True).start()
     # 開機先做一次掃描，確認設定正確
     threading.Thread(target=lambda: (time.sleep(5), job_scan("啟動掃描")), daemon=True).start()
+    # 黃金開機通知 —— 2026-10-03 加。之前只有港股有「啟動掃描」，
+    # 用戶 update 後收到港股但收唔到黃金，以為黃金壞咗。
+    threading.Thread(target=lambda: (time.sleep(8), job_startup_gold()), daemon=True).start()
+    # Telegram 收訊（雙向）—— 2026-10-03 加。之前完全單向。
+    threading.Thread(target=_start_telegram, daemon=True).start()
     log.info("背景排程已啟動（掃描 %s／每 %d 分鐘監控／%s 收市提醒）",
              SCAN_TIMES, MONITOR_INTERVAL_MIN, CLOSE_REMINDER_TIME)
+
+
+def job_startup_gold():
+    """開機通知（黃金頻道）—— 講清楚而家係唔係掃描時段。"""
+    try:
+        t = now_hk()
+        if gold._session_ok(t):
+            body = "✅ 而家喺黃金掃描時段（每日 15:00–01:00）\n有新訊號會通知你。"
+        else:
+            body = ("😴 而家 *唔喺* 黃金掃描時段（每日 15:00–01:00）\n"
+                    "所以暫時唔會有 XAUUSD 訊號 —— 呢個係正常，唔係故障。")
+        import notifier
+        notifier.push(
+            "\n".join([
+                "🫀 *系統已重新啟動*",
+                f"⏰ {t.strftime('%Y-%m-%d %H:%M')}（香港時間）",
+                "",
+                body,
+                "",
+                "📸 你可以直接喺呢度傳 MT4 截圖，我會幫你 OCR 開草稿。",
+            ]),
+            channel="gold")
+    except Exception:  # noqa: BLE001
+        log.exception("黃金啟動通知失敗")
+
+
+def _start_telegram():
+    """啟動 Telegram 收訊輪詢（背景 thread）。"""
+    try:
+        import telegram_bot
+        telegram_bot.poll_loop("gold")
+    except Exception:  # noqa: BLE001
+        log.exception("Telegram 收訊啟動失敗")
 
 
 # 模組被匯入時即刻啟動排程 —— 呢句一定要放喺 if __name__ 之外

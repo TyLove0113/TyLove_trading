@@ -324,6 +324,8 @@ def fmt_gold_signal(g: dict) -> str:
         # 嘅時間，唔係真正延遲 —— 令人以為遲咗 15 分鐘。真正延遲係「收盤到發出」。
         f"⏱ *真正延遲* {max(0.0, (age or 0) - 15):.1f} 分鐘（K 線收盤 → 系統發出）",
         "",
+        (f"📅 當日方向：只做*{'升' if g.get('daily_bias')=='long' else '跌'}*"
+         "（H1 EMA 趨勢，當日固定）" if g.get("daily_bias") else ""),
         "理由：" + "；".join(g.get("reasons", [])[:3]),
         "",
         f"⚠️ {g.get('disclaimer','')}",
@@ -348,6 +350,8 @@ def fmt_gold_early(a: dict) -> str:
         f"突破位 *{lvl}*　現價 *{px}*",
         f"（已穿 {abs(a['diff']):.2f} 美元）",
         "─" * 18,
+        (f"📅 當日方向：只做*{'升' if a.get('daily_bias')=='long' else '跌'}*（H1 EMA 趨勢）"
+         if a.get("daily_bias") else ""),
         f"通道：前 20 支 K 線高／低點",
         "⚠️ 呢個係 *未收盤* 嘅即時預警，價位可能彈返入區間。",
         "K 線收盤後如果仍然突破，會再出正式訊號確認。",

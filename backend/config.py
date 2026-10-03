@@ -149,6 +149,23 @@ KEEP_TICKS = int(os.getenv("KEEP_TICKS", "1500000"))
 
 GOLD_MAX_CHASE_ATR = float(os.getenv("GOLD_MAX_CHASE_ATR", "0.5"))
 
+# ── 2026-10-02 新增 ────────────────────────────────────────────────
+# B. 最少穿透門檻（以 ATR 計）。實測（2026-10-02）系統喺 1 個鐘內出咗 5 條
+#    向下突破預警，穿透幅度只有 0.30 / 0.70 / 1.70 / 3.80 美元，
+#    即 ATR(14) 嘅 2%–27% —— $0.30 喺黃金上純粹係噪音。
+#    0 = 唔設門檻（舊行為）；0.15 = 至少穿 ATR 嘅 15% 才通知。
+GOLD_MIN_BREAK_ATR = float(os.getenv("GOLD_MIN_BREAK_ATR", "0.15"))
+
+# C. 每日方向偏見：每日只准做同一個方向（升／跌），唔會中途反手。
+#    由 H1 圖 EMA20 vs EMA50 決定，每日只計一次、當日固定不變。
+#    起因：2026-10-02 18:33 出「向下突破」→ 跟咗輸 $53.20；
+#    同日 20:45 系統自己反手出「做多」。當日內方向反覆 = 兩邊輸。
+#    0 = 停用；1 = 啟用。
+GOLD_DAILY_BIAS = int(os.getenv("GOLD_DAILY_BIAS", "1"))
+
+# 每日偏見嘅計算時刻（香港時間，HH:MM）。當日第一支 H1 K 線收盤後為之。
+GOLD_BIAS_HOUR = int(os.getenv("GOLD_BIAS_HOUR", "9"))
+
 # ③ 真實報價接收（Option A/C）—— 由你 MT4 EA 或 MT5 Python 推送過嚟
 #    超過幾多分鐘冇新 K 線就當斷線，自動回落到 yfinance
 GOLD_FEED_MAX_AGE_MIN = int(os.getenv("GOLD_FEED_MAX_AGE_MIN", "30"))

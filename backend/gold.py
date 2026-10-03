@@ -251,6 +251,20 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     if _lim > 0 and out["today_trades"] >= _lim:
         reasons.append(f"⚠️ 今日已有 {out['today_trades']} 筆訊號（上限 {_lim} 筆），唔再出")
 
+    # ── B. 最少穿透門檻（2026-10-02 新增）──
+    # 舊版「Close > 20 支高位」就當突破，穿 $0.01 都算 —— 假訊號主要來源。
+    _atr_v = float(last["atr"]) if pd.notna(last.get("atr")) else 0.0
+    _need = _min_break_gap(_atr_v)
+    if _need > 0:
+        if broke_up and (float(last["Close"]) - float(last["hh"])) < _need:
+            broke_up = False
+            reasons.append("穿透 %.2f 未夠門檻 %.2f，唔當突破" % (
+                float(last["Close"]) - float(last["hh"]), _need))
+        if broke_dn and (float(last["ll"]) - float(last["Close"])) < _need:
+            broke_dn = False
+            reasons.append("穿透 %.2f 未夠門檻 %.2f，唔當突破" % (
+                float(last["ll"]) - float(last["Close"]), _need))
+
     direction = None
     if broke_up and not prev_up:
         direction = "long"
@@ -279,6 +293,16 @@ def evaluate(df: pd.DataFrame = None) -> dict:
             + ("EMA20 低於 EMA50（下降趨勢）" if direction == "long"
                else "EMA20 高於 EMA50（上升趨勢）")
             + "，趨勢過濾擋咗呢個" + ("做多" if direction == "long" else "做空"))
+
+    # ── C. 每日方向偏見（2026-10-02 新增）──
+    _ok, _bias = _bias_ok(direction)
+    out["daily_bias"] = _bias
+    if not _ok:
+        blocked = True
+        reasons.append(
+            "⚠️ 逆當日方向偏見：今日只做%s（H1 EMA 趨勢），呢個%s訊號擋咗" % (
+                "升" if _bias == "long" else "跌",
+                "做多" if direction == "long" else "做空"))
 
     out["trend_conflict"] = trend_conflict
     out["chase_atr"] = chase_atr
@@ -367,6 +391,62 @@ def _pick_lot(stop_dist: float, equity: float, risk_pct: float) -> float:
 
 
 # ------------------------------------------------------------------ 主入口
+def daily_bias(refresh: bool = False):
+    """當日方向偏見：每日只做一個方向（升／跌），當日固定不變。
+
+    2026-10-02 起因：18:33 出「向下突破」→ 跟咗輸 $53.20；同日 20:45
+    系統自己反手出「做多」。日內方向反覆 = 兩邊都輸。
+
+    用 H1 圖 EMA20 vs EMA50 決定，每日只計一次並寫入 DB。
+    想停用：Railway 加 GOLD_DAILY_BIAS=0
+    """
+    if not getattr(config, "GOLD_DAILY_BIAS", 0):
+        return None
+    today = datetime.now(ZoneInfo(config.HK_TZ)).strftime("%Y-%m-%d")
+    try:
+        init_db()
+        with _conn() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS gold_bias"
+                      "(day TEXT PRIMARY KEY, bias TEXT, note TEXT, ts TEXT)")
+            if not refresh:
+                row = c.execute("SELECT bias FROM gold_bias WHERE day=?", (today,)).fetchone()
+                if row:
+                    return row[0]
+        h1 = add_indicators(fetch(interval="1h", period="60d"))
+        if len(h1) < 55:
+            return None
+        last = h1.iloc[-2]          # 用已收盤嘅 H1 支，唔用未收盤
+        bias = "long" if float(last["ema20"]) >= float(last["ema50"]) else "short"
+        note = "H1 EMA20 %.2f %s EMA50 %.2f" % (
+            float(last["ema20"]), "≥" if bias == "long" else "<", float(last["ema50"]))
+        with _conn() as c:
+            c.execute("INSERT OR REPLACE INTO gold_bias(day,bias,note,ts) VALUES(?,?,?,?)",
+                      (today, bias, note,
+                       datetime.now(ZoneInfo(config.HK_TZ)).strftime("%Y-%m-%d %H:%M")))
+        log.info("📅 當日方向偏見：%s（%s）", bias, note)
+        return bias
+    except Exception:  # noqa: BLE001
+        log.exception("計當日方向偏見失敗")
+        return None
+
+
+def _min_break_gap(atr: float) -> float:
+    """最少穿透門檻（美元）。0 = 唔設門檻。"""
+    try:
+        pct = float(getattr(config, "GOLD_MIN_BREAK_ATR", 0) or 0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return pct * atr if (pct > 0 and atr and atr > 0) else 0.0
+
+
+def _bias_ok(direction: str):
+    """回 (係唔係可以出, 今日偏見)。偏見未定或停用 → 一律放行。"""
+    b = daily_bias()
+    if not b or not direction:
+        return True, b
+    return (direction == b), b
+
+
 def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
     """⚡ 即時預警：價格一穿 20 支區間就推，唔等 K 線收盤。
 
@@ -395,6 +475,20 @@ def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
     else:
         return {"ok": True, "fired": False}
 
+    # ── B. 最少穿透門檻（2026-10-02 新增）──
+    _atr = float(last["atr"]) if pd.notna(last.get("atr")) else 0.0
+    _need = _min_break_gap(_atr)
+    if _need > 0 and abs(price - level) < _need:
+        return {"ok": True, "fired": False,
+                "reason": "穿透 %.2f 未夠門檻 %.2f（ATR 嘅 %.0f%%）" % (
+                    abs(price - level), _need, config.GOLD_MIN_BREAK_ATR * 100)}
+
+    # ── C. 每日方向偏見（2026-10-02 新增）──
+    _ok, _b = _bias_ok(direction)
+    if not _ok:
+        return {"ok": True, "fired": False,
+                "reason": "逆當日方向偏見（今日只做%s）" % ("升" if _b == "long" else "跌")}
+
     key = f"{ts}|{direction}"
     init_db()
     with _conn() as c:
@@ -414,6 +508,7 @@ def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
             "detected": now_hk.strftime("%Y-%m-%d %H:%M:%S"),
             "bar_window": (t + pd.Timedelta(minutes=15)).strftime("%H:%M"),
             "live_feed": _live(),
+            "daily_bias": _b,
             "spot_offset": config.GOLD_SPOT_OFFSET, "data_age_min": 0.0}
     if push:
         try:

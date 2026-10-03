@@ -77,7 +77,65 @@ def job_monitor():
 
 
 def job_open_scan():
+    """港股開市前掃描。休市日直接跳過（2026-10-03 加）。"""
+    if config.SKIP_WEEKEND and not _is_trading_day(now_hk()):
+        log.info("今日休市（%s），跳過港股掃描", now_hk().strftime("%A"))
+        return
     job_scan("開市前掃描")
+
+
+def job_heartbeat():
+    """每日心跳 —— 報「系統正常／今日休市」，令你分得出靜同死。
+
+    2026-10-03（星期六）用戶全日冇收到任何訊息，分唔到係市場休市
+    定係系統掛咗。從此每日固定時間一定有一條。
+    """
+    try:
+        t = now_hk()
+        wd = ["一", "二", "三", "四", "五", "六", "日"][t.weekday()]
+        trading = _is_trading_day(t)
+        lines = [
+            "🫀 *系統正常運作*",
+            f"⏰ {t.strftime('%Y-%m-%d %H:%M')}（香港時間）",
+            "",
+            (f"📅 今日：星期{wd} — *正常交易日*" if trading
+             else f"📅 今日：星期{wd} — *休市*（港股同黃金都唔開）"),
+        ]
+        if not trading:
+            lines.append("   下次開市：黃金 週一 05:00／港股 週一 09:30")
+        # 記錄統計（有錯都唔可以令心跳唔出）
+        try:
+            import journal
+            nd = len(journal.drafts())
+            with journal._conn() as c:
+                n = c.execute(
+                    "SELECT COUNT(*) FROM gold_trades WHERE status!='draft'"
+                ).fetchone()[0]
+            lines += ["", f"💰 記錄：正式 *{n}* 筆／草稿 *{nd}* 張"]
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import gold as _g
+            lines.append("📡 黃金數據源：*券商真實報價（MT4）*"
+                         if _g._live() else "📡 黃金數據源：yfinance（延遲 10–20 分鐘）")
+        except Exception:  # noqa: BLE001
+            pass
+        if not trading:
+            lines += ["", "唔使理呢條訊息，佢只係話你知系統仍然活住。"]
+        import notifier                    # 同其他 job 一樣，函數內匯入
+        notifier.push("\n".join(lines), channel="gold")
+        log.info("🫀 心跳已發送")
+    except Exception:  # noqa: BLE001
+        log.exception("心跳發送失敗")
+
+
+def _is_trading_day(t) -> bool:
+    """港股／黃金交易日（香港時間）。"""
+    if t.weekday() == 6:                 # 星期日
+        return False
+    if t.weekday() == 5 and t.hour >= 5:  # 星期六 05:00 後
+        return False
+    return True
 
 
 def job_gold_scan():
@@ -111,6 +169,8 @@ def _schedule_targets() -> list:
     """今日所有要觸發嘅時間點（香港時間 HH:MM）。"""
     out = [t.strip() for t in SCAN_TIMES if t.strip()]
     out.append(CLOSE_REMINDER_TIME.strip())
+    if config.HEARTBEAT_TIME:
+        out.append(config.HEARTBEAT_TIME)
     return out
 
 
@@ -141,7 +201,9 @@ def scheduler_loop():
             hhmm = t.strftime("%H:%M")
             if hhmm in _schedule_targets() and hhmm not in fired:
                 fired.add(hhmm)
-                if hhmm == CLOSE_REMINDER_TIME.strip():
+                if hhmm == config.HEARTBEAT_TIME:
+                    threading.Thread(target=job_heartbeat, daemon=True).start()
+                elif hhmm == CLOSE_REMINDER_TIME.strip():
                     threading.Thread(target=job_close_reminder, daemon=True).start()
                 else:
                     threading.Thread(target=job_open_scan, daemon=True).start()

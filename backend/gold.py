@@ -184,7 +184,16 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------------------ 判斷
 def _session_ok(t: datetime) -> bool:
-    """倫敦 + 紐約活躍時段（香港時間 15:00 – 01:00）。"""
+    """倫敦 + 紐約活躍時段（香港時間 15:00 – 01:00）。
+
+    2026-10-03 加週末判斷：舊版冇睇星期幾，星期六日照樣掃描。
+    黃金週五 17:00 ET 收市 = 香港週六 05:00，直到週一 05:00 才重開。
+    """
+    if config.SKIP_WEEKEND:
+        if t.weekday() == 6:                    # 星期日全日休市
+            return False
+        if t.weekday() == 5 and t.hour >= 5:    # 星期六 05:00 後收市
+            return False
     return t.hour >= 15 or t.hour < 1
 
 

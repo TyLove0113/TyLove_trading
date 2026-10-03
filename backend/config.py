@@ -188,3 +188,11 @@ DB_PATH = os.getenv("DB_PATH", str(BASE_DIR / "data" / "tylove.db"))
 PORT = int(os.getenv("PORT", "8080"))
 DASH_USER = os.getenv("DASH_USER", "")
 DASH_PASS = os.getenv("DASH_PASS", "")
+
+
+# ── 2026-10-03 新增 ───────────────────────────────────────────
+# 每日心跳：固定時間報「系統正常運作／今日休市」，令你分得出
+# 「市場靜」同「系統死」。2026-10-03（星期六）用戶全日冇訊息，
+# 但分唔到係正常休市定係系統掛咗。
+HEARTBEAT_TIME = os.getenv("HEARTBEAT_TIME", "09:00").strip()
+SKIP_WEEKEND = int(os.getenv("SKIP_WEEKEND", "1"))   # 休市日唔做無謂掃描

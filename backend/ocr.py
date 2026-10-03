@@ -210,10 +210,13 @@ def _mt4_raw(txt: str) -> str | None:
 
 
 # ------------------------------------------------------------------ 主流程
-def extract_trades(data) -> list[dict]:
-    """由截圖抽出所有成交。data = bytes 或 PIL Image。
+def _rows(data) -> list[dict]:
+    """抽出截圖入面所有「似成交」嘅行（開倉 + 平倉都收）。
 
-    ⚠️ 只係「候選值」—— 一定要經用戶喺草稿度確認先入正式記錄。
+    2026-10-03：以前呢個函數叫 extract_trades，但佢連「交易」分頁嘅
+    未平倉持倉都當成已平倉成交 —— 而「交易」分頁嘅第 4 個價格其實係
+    「現價」、最後個數字係「浮動盈虧」。結果會寫入假平倉價同假盈虧。
+    而家一律先收齊，再由 extract_trades / extract_positions 分辨。
     """
     if isinstance(data, (bytes, bytearray)):
         img = Image.open(io.BytesIO(data)).convert("RGB")
@@ -308,9 +311,44 @@ def extract_trades(data) -> list[dict]:
         got["exit_price"] = prices[3] if len(prices) > 3 else None
         got["profit"] = extra[-1] if extra else None
         got["confidence"] = round(min(confs), 2)
-        if got.get("actual_entry") and got.get("exit_price"):
+        # 一個真行：至少要有入場價 + 另一個價格。
+        # ⚠️ 唔可以用 exit_price 做條件 —— 「交易」分頁嘅未平倉單都有
+        #    第 4 個價格（現價），會令佢被誤當成已平倉。
+        if got.get("actual_entry") and len(prices) >= 2:
+            got["is_closed"] = bool(got.get("opened_at") and got.get("closed_at"))
             trades.append(got)
     return trades
+
+
+def extract_trades(data) -> list[dict]:
+    """**已平倉**成交（MT4「歷史」分頁）—— 呢啲先可以入日誌。"""
+    return [r for r in _rows(data) if r.get("is_closed")]
+
+
+def extract_positions(data) -> list[dict]:
+    """**未平倉**持倉（MT4「交易」分頁）—— 唔可以入日誌。
+
+    「交易」分頁每行只有一個時間（開倉），冇平倉時間；
+    第 4 個價格係「現價」，最後個數字係「浮動盈虧」。
+    """
+    return [r for r in _rows(data) if not r.get("is_closed")]
+
+
+def diagnose(data) -> dict:
+    """話畀用戶知：呢張圖到底係咩？等錯誤訊息講得出真正原因。"""
+    try:
+        rows = _rows(data)
+    except Exception as e:  # noqa: BLE001
+        return {"rows": 0, "closed": 0, "open": 0, "error": "%s: %s" % (type(e).__name__, e)}
+    closed = [r for r in rows if r.get("is_closed")]
+    opened = [r for r in rows if not r.get("is_closed")]
+    if closed:
+        what = "history"
+    elif opened:
+        what = "positions"
+    else:
+        what = "nothing"
+    return {"rows": len(rows), "closed": len(closed), "open": len(opened), "what": what}
 
 
 def extract(data) -> dict:

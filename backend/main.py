@@ -544,10 +544,23 @@ def gold_ocr():
         trades = ocr.extract_trades(data)
 
         if not trades:
+            _d = ocr.diagnose(data)
+            if _d.get("what") == "positions":
+                _note = ("⚠️ 呢張係 MT4「交易」分頁嘅 *未平倉持倉*（%d 張），"
+                         "唔係「歷史」分頁嘅成交記錄。\n"
+                         "未平倉單未有平倉價同已實現盈虧 —— 寫入日誌會係假數，"
+                         "所以系統特登唔開草稿。\n"
+                         "→ 請去 MT4「歷史」分頁截圖（等張單平倉之後）。") % _d.get("open", 0)
+            elif _d.get("what") == "nothing":
+                _note = ("⚠️ 讀唔到任何表格。請確認：\n"
+                         "① 係 MT4「歷史」分頁（已平倉記錄）\n"
+                         "② 成個表都入到鏡頭（唔好裁得太窄）\n"
+                         "③ 見到「訂單／時間／類型／價格」呢幾欄")
+            else:
+                _note = "⚠️ 診斷：%s" % (_d,)
             return jsonify({
                 "ok": True, "created": [], "shot": name, "count": 0,
-                "notes": ["讀唔到任何成交。確認截圖包含 MT4 嘅「歷史」分頁表格"
-                          "（要有訂單號、時間、價格嗰幾欄），同埋唔好裁得太窄。"],
+                "diagnose": _d, "notes": [_note],
             }), 200
 
         created, skipped = [], []

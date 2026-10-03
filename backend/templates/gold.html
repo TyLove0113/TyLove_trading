@@ -283,9 +283,21 @@ async function jOcrStatus(){
     const d = await (await fetch('/api/gold/ocr-status')).json();
     const st = $('ocrStat'), er = $('ocrErr');
     if (d.available) {
-      st.textContent = '✅ OCR 已啟用（' + d.engine + '）';
-      st.style.color = '#4ade80';
-      er.classList.add('hidden');
+      const _main = (d.engine === 'rapidocr');
+      st.textContent = '✅ OCR 已啟用（' + d.engine + '）'
+        + (_main ? '' : '　⚠️ 主引擎 rapidocr 未載入，讀圖準確度會明顯較低');
+      st.style.color = _main ? '#4ade80' : '#fbbf24';
+      if (_main) { er.classList.add('hidden'); }
+      else {
+        const rows = Object.entries(d.errors || {})
+          .map(([k,v]) => '<div><b>' + k + '</b>：' + v + '</div>').join('');
+        er.innerHTML = '<b>⚠️ 主引擎 rapidocr 未載入（截圖俾我睇呢段）</b>'
+          + '<div>rapidocr ' + (d.rapidocr_import ? '✅' : '❌')
+          + '／pytesseract ' + (d.tesseract_import ? '✅' : '❌')
+          + '／tesseract 執行檔 ' + (d.tesseract_binary ? '✅' : '❌') + '</div>'
+          + rows;
+        er.classList.remove('hidden');
+      }
     } else {
       st.textContent = '❌ OCR 未啟用';
       st.style.color = '#f87171';

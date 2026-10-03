@@ -184,8 +184,22 @@ def _status() -> str:
         n = c.execute(
             "SELECT COUNT(*) FROM gold_trades WHERE status!='draft'"
         ).fetchone()[0]
+    with journal._conn() as c:
+        rows = c.execute("SELECT pnl_usd FROM gold_trades "
+                         "WHERE status!='draft' AND pnl_usd IS NOT NULL").fetchall()
+    pnls = [r[0] for r in rows]
+    win = [x for x in pnls if (x or 0) > 0]
+    lose = [x for x in pnls if (x or 0) < 0]
     lines = ["📒 *交易日誌*", "正式記錄：*%d* 筆" % n,
              "未確認草稿：*%d* 張" % len(ds)]
+    if pnls:
+        lines += [
+            "",
+            "賺 *%d* 筆　蝕 *%d* 筆" % (len(win), len(lose)),
+            "淨盈虧：*%+.2f* USD" % sum(x or 0 for x in pnls),
+            "勝率：*%.0f%%*" % (100.0 * len(win) / len(pnls)),
+            "_距 30 筆目標仲差 %d 筆_" % max(0, 30 - len(pnls)),
+        ]
     if ds:
         lines.append("")
         for d in ds[:8]:
@@ -258,9 +272,23 @@ def _handle(token: str, my_chat, u: dict) -> None:
             return
         trades = ocr.extract_trades(data)
         if not trades:
-            _send(token, my_chat,
-                  "⚠️ 讀唔到成交紀錄。\n"
-                  "請確認截嘅係 MT4「歷史」分頁，而且成個表入到鏡頭。")
+            _d = ocr.diagnose(data)
+            if _d.get("what") == "positions":
+                _send(token, my_chat,
+                      "⚠️ *呢張係「交易」分頁嘅未平倉持倉*（%d 張）\n\n"
+                      "未平倉單未有平倉價同已實現盈虧 —— 寫入日誌會係假數，"
+                      "所以系統特登唔開草稿。\n\n"
+                      "👉 請去 MT4 *「歷史」分頁* 截圖（等張單平倉之後）。\n"
+                      "_（唔知邊個分頁？歷史 = 已平倉記錄，交易 = 手上持倉）_"
+                      % _d.get("open", 0))
+            elif _d.get("what") == "nothing":
+                _send(token, my_chat,
+                      "⚠️ *讀唔到任何表格*\n\n請確認：\n"
+                      "① 係 MT4「歷史」分頁（已平倉記錄）\n"
+                      "② 成個表都入到鏡頭（唔好裁得太窄）\n"
+                      "③ 見到「訂單／時間／類型／價格」呢幾欄")
+            else:
+                _send(token, my_chat, "⚠️ 診斷：%s" % (_d,))
             return
         shot = _save_shot(data)
         created, skipped = make_drafts(trades, shot)

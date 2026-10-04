@@ -320,9 +320,38 @@ def _rows(data) -> list[dict]:
     return trades
 
 
+_CACHE = {}
+
+
+def analyze(data) -> dict:
+    """一次過 OCR 完，之後所有查詢都重用個結果。
+
+    點解要 cache：同一張圖跑兩次 OCR = 雙倍記憶體 + 雙倍時間。
+    喺 Railway 細容器上好容易令 process 死 → 容器重啟 →
+    Telegram 重新派發未確認嘅 update → 你就見到「sd 一次讀兩次」。
+    用圖片內容嘅 hash 做 key，同一張圖只會真正 OCR 一次。
+    """
+    import hashlib
+    try:
+        key = hashlib.sha1(bytes(data)).hexdigest()
+    except Exception:  # noqa: BLE001
+        key = None
+    hit = _CACHE.get("v")
+    if key and hit and hit[0] == key:
+        return hit[1]
+    rows = _rows(data)
+    closed = [r for r in rows if r.get("is_closed")]
+    opened = [r for r in rows if not r.get("is_closed")]
+    what = "history" if closed else ("positions" if opened else "nothing")
+    out = {"rows": rows, "closed": closed, "open": opened, "what": what}
+    if key:
+        _CACHE["v"] = (key, out)      # 只留一份，唔會愈食愈多記憶體
+    return out
+
+
 def extract_trades(data) -> list[dict]:
     """**已平倉**成交（MT4「歷史」分頁）—— 呢啲先可以入日誌。"""
-    return [r for r in _rows(data) if r.get("is_closed")]
+    return analyze(data)["closed"]
 
 
 def extract_positions(data) -> list[dict]:
@@ -331,24 +360,18 @@ def extract_positions(data) -> list[dict]:
     「交易」分頁每行只有一個時間（開倉），冇平倉時間；
     第 4 個價格係「現價」，最後個數字係「浮動盈虧」。
     """
-    return [r for r in _rows(data) if not r.get("is_closed")]
+    return analyze(data)["open"]
 
 
 def diagnose(data) -> dict:
     """話畀用戶知：呢張圖到底係咩？等錯誤訊息講得出真正原因。"""
     try:
-        rows = _rows(data)
+        a = analyze(data)
     except Exception as e:  # noqa: BLE001
-        return {"rows": 0, "closed": 0, "open": 0, "error": "%s: %s" % (type(e).__name__, e)}
-    closed = [r for r in rows if r.get("is_closed")]
-    opened = [r for r in rows if not r.get("is_closed")]
-    if closed:
-        what = "history"
-    elif opened:
-        what = "positions"
-    else:
-        what = "nothing"
-    return {"rows": len(rows), "closed": len(closed), "open": len(opened), "what": what}
+        return {"rows": 0, "closed": 0, "open": 0,
+                "error": "%s: %s" % (type(e).__name__, e)}
+    return {"rows": len(a["rows"]), "closed": len(a["closed"]),
+            "open": len(a["open"]), "what": a["what"]}
 
 
 def extract(data) -> dict:

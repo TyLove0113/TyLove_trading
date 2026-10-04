@@ -7,12 +7,21 @@
 # ⚠️ 呢個檔淨係加系統函式庫，唔會覆寫 railway.json 嘅 build / start 指令。
 #
 # 同時裝 tesseract 做後備：rapidocr 仲有問題時系統會自動退去 tesseract。
+# 2026-10-04 更新：之前只加咗 libgl1／libgomp1 等，但仍然爆
+#   ImportError: libxcb.so.1: cannot open shared object file
+# 原因：opencv-python（非 headless 版）連住 Qt，Qt 需要 xcb 系列。
+# 今次補齊 X11／xcb 一組，令 import cv2 真正成功。
 [phases.setup]
 aptPkgs = [
     "libgl1", "libgomp1",            # opencv 必需（rapidocr）
     "libglib2.0-0",      # opencv 必需
     "libsm6",            # opencv 影像編解碼
     "libxext6",
+    "libxcb1",           # ← 2026-10-04 補：libxcb.so.1（今次爆嘅就係呢個）
+    "libx11-6",          # ← Qt／xcb 依賴
+    "libxrender1",       # ← Qt／xcb 依賴
+    "libxcb-shm0",       # ← 少數情況會連住用
+    "libxcb-randr0",
     "tesseract-ocr",     # 後備 OCR 引擎
     "tesseract-ocr-eng", # 英文＋數字（MT4 介面係英文）
 ]

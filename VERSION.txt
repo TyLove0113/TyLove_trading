@@ -16,3 +16,18 @@ TyLove Trading  —  版本 4.7（2026-10-04）
 【v4.6 — 2026-10-03】Telegram 雙向 + 開機通知 + 心跳 + 休市判斷
 【v4.5 — 2026-10-03】每日心跳、休市判斷
 【v4.4 — 2026-10-02】穿透門檻、每日方向偏見
+
+v4.8（2026-10-04）
+ · 新增 gold_positions.py —— MT4「交易」分頁 → 未平倉持倉（E3 基礎）
+ · 訊號後自動監控：接近止蝕／目標／穿位 → Telegram 提示（同提示唔重複）
+ · Telegram 傳「交易」截圖 → 記住持倉；歷史截圖 → 開草稿（兩種圖都支援）
+ · 網頁上傳亦分開處理，新增 /api/gold/positions
+ · 修網頁「讀到 undefined」—— 路由同時回 read 同 created_info
+ · 持倉時間亦轉香港時間
+
+v4.9（2026-10-04）
+ · nixpacks.toml 補 libxcb1／libx11-6／libxrender1／libxcb-shm0／libxcb-randr0
+   —— 一直令 rapidocr 載入失敗嘅就係 libxcb.so.1 唔存在。
+   加齊之後主引擎應該起得返，OCR 準確度會返到沙盒測試嘅水平。
+ · ocr.py 加 analyze()：同一張圖只跑一次 OCR（之前每個請求跑兩次）。
+   雙倍記憶體係容器重啟、進而令 Telegram 重複讀圖嘅嫌疑之一。

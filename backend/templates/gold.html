@@ -278,6 +278,28 @@ const $ = id => document.getElementById(id);
 // ==================== 待確認草稿 ====================
 // 2026-09-30：MT4 自動讀入嘅成交會放喺度等你核對。
 // 你撳「確認」先正式入帳，撳「丟棄」就刪走 —— 系統唔會代你決定。
+async function loadPositions(){
+  try {
+    const d = await (await fetch('/api/gold/positions')).json();
+    const box = $('posBox');
+    if (!box) return;
+    const ps = d.positions || [];
+    if (!ps.length) {
+      box.innerHTML = '<div class="muted">📭 而家冇未平倉持倉。'
+        + '去 MT4「交易」分頁截圖傳上嚟，我就會幫你監控。</div>';
+      return;
+    }
+    box.innerHTML = '<div style="margin-bottom:6px"><b>📌 未平倉持倉（'
+      + ps.length + ' 張）</b>　<span class="muted">黃金時段每 15 分鐘對價</span></div>'
+      + ps.map(p => '<div class="row" style="padding:6px 0;border-top:1px solid #ffffff14">'
+        + '<b>#' + (p.ticket || p.id) + '</b>　'
+        + (p.direction === 'long' ? '🟢做多' : '🔴做空') + '　' + p.lot + '手'
+        + '<br><span class="muted">入 ' + p.entry + '　止 ' + (p.stop || '—')
+        + '　標 ' + (p.target || '—') + '　香港 ' + (p.opened_at || '—') + '</span>'
+        + '</div>').join('');
+  } catch (e) { /* 靜靜咁失敗，唔阻主流程 */ }
+}
+
 async function jOcrStatus(){
   try {
     const d = await (await fetch('/api/gold/ocr-status')).json();
@@ -339,16 +361,24 @@ async function jOcr(input){
       msg.textContent = '❌ ' + (r.error || '解讀失敗') + extra;
       return;
     }
+    // 2026-10-04：「交易」分頁（持倉）唔會開草稿，只記住用嚟監控
+    if (r.kind === 'positions') {
+      msg.textContent = '📌 ' + ((r.notes || [])[0] || '');
+      loadPositions();
+      return;
+    }
     const n = (r.created || []).length;
     if (!n) {
-      msg.textContent = '⚠️ 讀唔到成交。' + ((r.notes || [])[0] || '');
+      msg.textContent = '⚠️ ' + ((r.notes || [])[0] || '讀唔到成交。');
       loadJournal();
       return;
     }
-    let det = (r.created || []).map(c =>
-      '#' + c.ticket + ' ' + (c.direction === 'long' ? '🟢做多' : '🔴做空') +
+    const info = r.created_info || [];
+    let det = info.map(c =>
+      '#' + (c.ticket || c.id) + ' ' + (c.direction === 'long' ? '🟢做多' : '🔴做空') +
       ' ' + c.lot + '手 盈虧' + c.pnl_usd).join('　');
-    msg.textContent = '✅ 讀到 ' + r.read + ' 筆，開咗 ' + n + ' 張草稿 → ' + det +
+    if (!det) det = n + ' 張';
+    msg.textContent = '✅ 讀到 ' + (r.read || n) + ' 筆，開咗 ' + n + ' 張草稿 → ' + det +
       '　請核對後撳「確認入帳」';
     loadJournal();
   } catch (e) {
@@ -806,6 +836,7 @@ async function loadFeed(){
 refresh();
 loadFeed();
 jOcrStatus();
+loadPositions();
 setInterval(refresh, 60000);
 setInterval(loadFeed, 30000);
 loadDbStatus();
@@ -863,5 +894,6 @@ async function pushGSettings(payload, okMsg){
   }
 }
 </script>
+<div id="posBox" class="card"></div>
 </body>
 </html>

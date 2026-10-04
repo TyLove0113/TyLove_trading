@@ -243,13 +243,26 @@ def _handle(token: str, my_chat, u: dict) -> None:
     if text.startswith("/status"):
         _send(token, my_chat, _status())
         return
+    if text.startswith("/pos"):
+        import gold_positions as gp
+        _send(token, my_chat, gp.fmt_list())
+        return
+    if text.startswith("/closed"):
+        import gold_positions as gp
+        n = gp.clear()
+        _send(token, my_chat,
+              "🧹 清走咗 %d 張持倉記錄。\n\n"
+              "（唔係平倉，只係唔再監控。想再監控就再傳「交易」分頁截圖。）" % n)
+        return
     if text.startswith("/help") or text.startswith("/start"):
         _send(token, my_chat,
               "📸 *點用*\n"
-              "1. 喺 MT4 手機 app 截「歷史」分頁嗰版\n"
+              "1. MT4「歷史」分頁 → 記錄賺蝕（會開草稿等你確認）\n"
+              "　 MT4「交易」分頁 → 記住持倉，等我幫你監控\n"
               "2. 直接傳張圖畀呢個對話\n"
-              "3. 我讀完會開草稿，你撳「✅ 確認入帳」\n\n"
-              "/status 睇記錄同草稿\n"
+              "3. 傳完我即刻覆你，你撳「✅ 確認入帳」\n\n"
+              "/status 睇記錄同盈虧\n"
+              "/pos 睇未平倉持倉\n"
               "（想改數值就上網頁 /gold 改完先確認）")
         return
 
@@ -270,25 +283,44 @@ def _handle(token: str, my_chat, u: dict) -> None:
         if not data:
             _send(token, my_chat, "❌ 攞唔到張圖，再傳一次試吓")
             return
+        _d = ocr.diagnose(data)
+        _eng = (ocr.status() or {}).get("engine") or "?"
+
+        # 「交易」分頁 → 未平倉持倉 → 存起用嚟監控（E3）
+        # 「歷史」分頁 → 已平倉成交 → 開草稿入日誌。兩個用途唔同。
+        if _d.get("what") == "positions":
+            import gold_positions as gp
+            rows_p = ocr.extract_positions(data)
+            for _r in rows_p:                   # MT4 時間 → 香港時間
+                _r["opened_at"] = _hk(_r.get("opened_at"))
+            res = gp.save_from_ocr(rows_p)
+            lines = ["📌 *記住咗你嘅持倉*（%d 張）" % res["total"], ""]
+            for pp in rows_p[:6]:
+                dd = "🟢做多" if pp.get("direction") == "long" else "🔴做空"
+                lines.append("%s　%s手　#%s"
+                             % (dd, pp.get("lots"), pp.get("ticket") or "—"))
+                lines.append("　入 %s　止 %s　標 %s" % (
+                    pp.get("actual_entry"), pp.get("actual_stop") or "—",
+                    pp.get("signal_target_hint") or "—"))
+            lines += ["",
+                      "我會喺黃金時段（15:00–01:00）每 15 分鐘對價，",
+                      "接近止蝕／目標就即刻提你。",
+                      "", "打 /pos 隨時睇持倉。"]
+            _send(token, my_chat, "\n".join(lines))
+            log.info("Telegram 持倉：新增 %d／更新 %d", res["added"], res["updated"])
+            return
+
         trades = ocr.extract_trades(data)
         if not trades:
-            _d = ocr.diagnose(data)
-            if _d.get("what") == "positions":
-                _send(token, my_chat,
-                      "⚠️ *呢張係「交易」分頁嘅未平倉持倉*（%d 張）\n\n"
-                      "未平倉單未有平倉價同已實現盈虧 —— 寫入日誌會係假數，"
-                      "所以系統特登唔開草稿。\n\n"
-                      "👉 請去 MT4 *「歷史」分頁* 截圖（等張單平倉之後）。\n"
-                      "_（唔知邊個分頁？歷史 = 已平倉記錄，交易 = 手上持倉）_"
-                      % _d.get("open", 0))
-            elif _d.get("what") == "nothing":
-                _send(token, my_chat,
-                      "⚠️ *讀唔到任何表格*\n\n請確認：\n"
-                      "① 係 MT4「歷史」分頁（已平倉記錄）\n"
-                      "② 成個表都入到鏡頭（唔好裁得太窄）\n"
-                      "③ 見到「訂單／時間／類型／價格」呢幾欄")
-            else:
-                _send(token, my_chat, "⚠️ 診斷：%s" % (_d,))
+            _send(token, my_chat,
+                  "⚠️ *讀唔到任何表格*\n\n請確認：\n"
+                  "① 係 MT4「歷史」分頁（已平倉）或「交易」分頁（持倉）\n"
+                  "② 成個表都入到鏡頭（唔好裁得太窄）\n"
+                  "③ 見到「訂單／時間／類型／價格」呢幾欄\n"
+                  "④ 上下兩邊嘅按鈕列唔好遮住表格\n\n"
+                  "_（歷史 = 已平倉記錄；交易 = 手上持倉。兩個傳齊先完整。）_"
+                  "\n\n_OCR 引擎：%s_" % _eng)
+            log.info("Telegram OCR 讀唔到：%s（引擎 %s）", _d, _eng)
             return
         shot = _save_shot(data)
         created, skipped = make_drafts(trades, shot)

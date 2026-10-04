@@ -145,13 +145,50 @@ def _is_trading_day(t) -> bool:
 
 
 def job_gold_scan():
-    """黃金 XAU/USD 分析（獨立於港股，用另一個 Telegram bot）。"""
+    """黃金 XAU/USD 分析 + 持倉監控（獨立於港股，用另一個 Telegram bot）。"""
     if not config.GOLD_ENABLED:
         return
     try:
         gold.scan(push=True)
     except Exception:  # noqa: BLE001
         log.exception("黃金掃描失敗")
+    # E3：持倉監控 —— 用戶傳過「交易」分頁截圖就有持倉可跟
+    try:
+        job_position_watch()
+    except Exception:  # noqa: BLE001
+        log.exception("持倉監控失敗")
+
+
+def job_position_watch():
+    """對現價檢查未平倉持倉，接近止蝕／目標就通知。
+
+    2026-10-04 新增（E3）。冇持倉就即刻收工，唔會發任何訊息。
+    """
+    import gold_positions as gp
+    ps = gp.all_open()
+    if not ps:
+        return {"checked": 0}
+    now = now_hk()
+    if config.SKIP_WEEKEND and not _is_trading_day(now):
+        return {"checked": 0, "reason": "休市"}
+    if not gold._session_ok(now):
+        return {"checked": 0, "reason": "唔喺黃金時段"}
+    # 用同一個數據源攞現價
+    try:
+        df = gold.add_indicators(gold.fetch())
+        price = float(df.iloc[-1]["Close"])
+        atr = float(df.iloc[-1]["atr"]) if "atr" in df.columns else 0.0
+    except Exception:  # noqa: BLE001
+        log.exception("持倉監控攞價失敗")
+        return {"checked": 0, "error": "攞唔到價"}
+    alerts = gp.check(price)
+    if not alerts:
+        return {"checked": len(ps), "price": price, "alerts": 0}
+    import notifier
+    for a in alerts:
+        notifier.push(gp.fmt_alert(a), channel="gold")
+    log.info("持倉監控：現價 %.2f，發咗 %d 條提示", price, len(alerts))
+    return {"checked": len(ps), "price": price, "alerts": len(alerts)}
 
 
 def job_gold_early():
@@ -431,6 +468,25 @@ def gold_feed_bars():
                     "bars_count": st["bars_count"], "hint": st["hint"]})
 
 
+@app.route("/api/gold/positions")
+def api_gold_positions():
+    """未平倉持倉（由「交易」分頁截圖記低）。2026-10-04 新增（E3）。"""
+    try:
+        import gold_positions as gp
+        return jsonify({"ok": True, "positions": gp.all_open()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc), "positions": []})
+
+
+@app.route("/api/gold/positions/clear", methods=["POST"])
+def api_gold_positions_clear():
+    try:
+        import gold_positions as gp
+        return jsonify({"ok": True, "cleared": gp.clear()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)})
+
+
 @app.route("/api/gold/journal", methods=["GET", "POST"])
 def gold_journal():
     """黃金交易日誌 —— 記錄執行偏差、點差、跟足程度。"""
@@ -541,10 +597,39 @@ def gold_ocr():
                             "error": "OCR 未就緒（引擎：%s）" % (st.get("engine"),),
                             "diag": st}), 200
 
+        _d = ocr.diagnose(data)
+
+        # 「交易」分頁 → 未平倉持倉（用嚟監控，唔會入日誌）
+        if _d.get("what") == "positions":
+            try:
+                import gold_positions as gp
+                rows_p = ocr.extract_positions(data)
+                for _r in rows_p:
+                    _r["opened_at"] = _hk_from_mt4(_r.get("opened_at"))
+                res = gp.save_from_ocr(rows_p)
+                return jsonify({
+                    "ok": True, "kind": "positions", "created": [],
+                    "read": len(rows_p), "count": len(rows_p),
+                    "added": res["added"], "updated": res["updated"],
+                    "positions": [{"ticket": r.get("ticket"),
+                                   "direction": r.get("direction"),
+                                   "entry": r.get("actual_entry"),
+                                   "stop": r.get("actual_stop"),
+                                   "target": r.get("signal_target_hint"),
+                                   "lot": r.get("lots"),
+                                   "opened_at": r.get("opened_at")}
+                                  for r in rows_p],
+                    "notes": ["📌 呢張係「交易」分頁 —— 記住咗 %d 張持倉，"
+                              "我會喺黃金時段每 15 分鐘對價，接近止蝕／目標就通知你。"
+                              % res["total"]],
+                }), 200
+            except Exception as exc:  # noqa: BLE001
+                app.logger.exception("持倉存檔失敗")
+                return jsonify({"ok": False, "error": str(exc)}), 200
+
         trades = ocr.extract_trades(data)
 
         if not trades:
-            _d = ocr.diagnose(data)
             if _d.get("what") == "positions":
                 _note = ("⚠️ 呢張係 MT4「交易」分頁嘅 *未平倉持倉*（%d 張），"
                          "唔係「歷史」分頁嘅成交記錄。\n"
@@ -564,6 +649,7 @@ def gold_ocr():
             }), 200
 
         created, skipped = [], []
+        created_info = []
         for t in trades:
             d = {
                 "direction": t.get("direction"),
@@ -593,10 +679,17 @@ def gold_ocr():
             if tid:
                 journal.mark_deal_journal(t.get("ticket"), tid)
                 created.append(tid)
+                created_info.append({
+                    "id": tid, "ticket": t.get("ticket"),
+                    "direction": t.get("direction"), "lot": t.get("lots"),
+                    "pnl_usd": t.get("profit"),
+                    "opened_at": _hk_from_mt4(t.get("opened_at")),
+                })
             else:
                 skipped.append(t.get("ticket"))
         return jsonify({
             "ok": True, "created": created, "skipped": skipped,
+            "read": len(trades), "created_info": created_info,
             "count": len(trades),
             "notes": (["%d 張草稿已開好，請逐張核對後確認入帳。" % len(created)]
                       if created else

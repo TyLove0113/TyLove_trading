@@ -224,8 +224,3 @@ __marimo__/
 .env
 *.db
 __pycache__/
-
-Old/
-.env
-*.db
-__pycache__/

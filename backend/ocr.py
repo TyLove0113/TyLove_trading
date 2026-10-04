@@ -11,7 +11,7 @@
 
 一張截圖通常有幾筆成交 —— extract_trades() 回傳 list。
 
-引擎：rapidocr（主）→ tesseract（後備）。兩個都係「文字 + 位置」，
+V4：只用 tesseract（2026-10-04 拆走 rapidocr／opencv）。
 所以歸一化成同一種 words 格式再解析。
 """
 from __future__ import annotations
@@ -50,45 +50,6 @@ _SYSLIB_LOADED = set()
 _SYSLIB_NOTE = ""
 
 
-def _preload_syslibs() -> str:
-    """預載系統庫鏈。回傳簡短結果，放喺 OCR 狀態供排查。"""
-    global _SYSLIB_NOTE
-    if _SYSLIB_NOTE:
-        return _SYSLIB_NOTE
-    import ctypes
-    got, miss = [], []
-    for name in _SYSLIB_CHAIN:
-        found = False
-        for d in _SYSLIB_DIRS:
-            fp = os.path.join(d, name)
-            if not os.path.exists(fp):
-                continue
-            found = True
-            try:
-                ctypes.CDLL(fp, mode=ctypes.RTLD_GLOBAL)
-                _SYSLIB_LOADED.add(name)
-                got.append(name)
-            except OSError:
-                miss.append(name)
-            break
-        if not found:
-            miss.append(name)
-    _SYSLIB_NOTE = "預載 %d 個成功／%d 個失敗%s" % (
-        len(got), len(miss),
-        ("，失敗：" + "、".join(miss)) if miss else "")
-    return _SYSLIB_NOTE
-
-
-_preload_syslibs()
-
-
-_RAPID, _RAPID_ERR = None, None
-try:
-    from rapidocr_onnxruntime import RapidOCR
-    _RAPID_ERR = None
-except Exception as e:  # noqa: BLE001
-    _RAPID_ERR = f"{type(e).__name__}: {e}"
-
 _TESS = False
 try:
     import pytesseract
@@ -106,21 +67,17 @@ if _TESS:
 _rapid_obj = None
 
 
-def _rapid():
-    """rapidocr 實例（第一次用先載入模型，之後重用）。"""
-    global _rapid_obj, _RAPID
-    if _rapid_obj is not None:
-        return _rapid_obj
-    if _RAPID_ERR and _RAPID is None:
-        return None
-    try:
-        _rapid_obj = RapidOCR()
-        _RAPID = True
-        return _rapid_obj
-    except Exception as e:  # noqa: BLE001
-        log.exception("rapidocr 載入失敗")
-        globals()["_RAPID_ERR"] = f"{type(e).__name__}: {e}"
-        return None
+_TYPE = {"buy": "long", "sell": "short", "買": "long", "賣": "short"}
+
+
+
+_RE_TICKET = re.compile(r"^\d{9,10}$")
+_RE_DATE = re.compile(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})")
+_RE_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
+_RE_NUM = re.compile(r"^-?\d+(?:\.\d+)?$")
+_RE_GLUED_DT = re.compile(r"^(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d)$")
+_TYPE = {"buy": "long", "sell": "short", "買": "long", "賣": "short"}
+
 
 
 def _tess_ok() -> bool:
@@ -128,51 +85,24 @@ def _tess_ok() -> bool:
 
 
 def available() -> bool:
-    return _PIL and (_rapid() is not None or _tess_ok())
+    """V4：只有 tesseract。"""
+    return _tess_ok()
 
-
-def engine() -> str | None:
-    if not _PIL:
-        return None
-    if _rapid() is not None:
-        return "rapidocr"
-    if _tess_ok():
-        return "tesseract"
-    return None
-
-
-def _syslib() -> dict:
-    """診斷用：三個關鍵系統庫喺唔喺度。
-
-    2026-10-04 加。之前只知「rapidocr import 失敗」，
-    但分唔清係「套件冇裝到」定「裝咗但載入器搵唔到」——
-    兩者修法完全唔同，所以要分開報。
-    """
-    import os
-    dirs = ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib64",
-            "/usr/lib", "/lib", "/usr/local/lib", "/opt/venv/lib")
-    out = {}
-    for f in ("libGL.so.1", "libxcb.so.1", "libgomp.so.1"):
-        out[f] = any(os.path.exists(os.path.join(d, f)) for d in dirs)
-    return out
-
+def engine():
+    """V4：只有 tesseract（唔再需要 opencv／GUI 系統庫）。"""
+    return "tesseract" if _tess_ok() else None
 
 def status() -> dict:
     eng = engine()
     errs = {}
-    if _RAPID_ERR:
-        errs["rapidocr"] = _RAPID_ERR
     if _TESS_BIN_ERR:
         errs["tesseract_bin"] = _TESS_BIN_ERR
     if not _PIL:
         errs["pillow"] = "Pillow 未安裝"
     return {
-        "syslib": _syslib(),
-        "preload": _preload_syslibs(),
         "available": eng is not None,
         "engine": eng,
         "pillow": _PIL,
-        "rapidocr_import": _RAPID_ERR is None,
         "tesseract_import": _TESS,
         "tesseract_binary": _tess_ok(),
         "errors": errs,
@@ -196,39 +126,40 @@ def _cap_size(img, max_w: int = 2000):
 
 
 def _words(img):
+    """回傳 [(x, y, text, conf)]（座標已還原成原圖比例）。
+
+    V4（2026-10-04）：只用 tesseract，拆走 rapidocr／opencv（唔再需要
+    任何 GUI 系統庫）。加「2 倍放大 + 自動對比」預處理 —— 實測歷史圖由
+    「漏 1 行 + 平倉價 4290.43 讀成 290.43」變成 4/4 全部正確。
+    """
     img = _cap_size(img)
-    """回傳 [(x, y, text, conf)]，兩個引擎都歸一化成同一格式。"""
-    import numpy as np
-    r = _rapid()
+    if not _tess_ok():
+        return []
+    import pytesseract
+    from PIL import ImageOps
+    im = img.convert("L")
+    scale = 2.0
+    if im.width * scale > 2600:
+        scale = max(1.0, 2600.0 / im.width)
+    if scale > 1.0:
+        im = im.resize((int(im.width * scale), int(im.height * scale)), Image.LANCZOS)
+    im = ImageOps.autocontrast(im)
+    d = pytesseract.image_to_data(im, lang="eng",
+                                  output_type=pytesseract.Output.DICT,
+                                  config="--psm 6")
     out = []
-    if r is not None:
-        res, _ = r(np.array(img))
-        for box, txt, score in (res or []):
-            xs = [p[0] for p in box]
-            ys = [p[1] for p in box]
-            out.append((min(xs), min(ys), (txt or "").strip(), float(score)))
-        return out
-    if _tess_ok():
-        import pytesseract
-        d = pytesseract.image_to_data(img, lang="eng", output_type=pytesseract.Output.DICT,
-                                      config="--psm 6")
-        for i, t in enumerate(d["text"]):
-            t = (t or "").strip()
-            if not t:
-                continue
+    for i, tok in enumerate(d["text"]):
+        tok = (tok or "").strip()
+        if not tok:
+            continue
+        try:
             conf = float(d["conf"][i]) / 100.0
-            if conf <= 0:
-                continue
-            out.append((float(d["left"][i]), float(d["top"][i]), t, conf))
+        except (TypeError, ValueError):
+            continue
+        if conf <= 0:
+            continue
+        out.append((float(d["left"][i]) / scale, float(d["top"][i]) / scale, tok, conf))
     return out
-
-
-# ------------------------------------------------------------------ 樣式
-_RE_TICKET = re.compile(r"^\d{9,10}$")
-_RE_DATE = re.compile(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})")
-_RE_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
-_RE_NUM = re.compile(r"^-?\d+(?:\.\d+)?$")
-_TYPE = {"buy": "long", "sell": "short", "買": "long", "賣": "short"}
 
 
 def _is_date(t: str) -> bool:
@@ -253,7 +184,7 @@ def _kind(t: str) -> str:
         return "type"
     if _RE_TICKET.match(s):
         return "ticket"
-    if _is_date(s):
+    if _is_date(s) or _RE_GLUED_DT.fullmatch(s):
         return "date"
     if _RE_TIME.fullmatch(s):
         return "time"
@@ -271,6 +202,10 @@ def _kind(t: str) -> str:
 
 def _norm_dt(txt: str) -> str | None:
     """'2026.09.21 13:49' → '2026-09-21 13:49'（只統一格式，唔改時區）。"""
+
+    m = _RE_GLUED_DT.fullmatch(txt.replace(" ", "").replace(":", ""))
+    if m:
+        return "%s-%s-%s %s:%s" % m.groups()
     d = _RE_DATE.search(txt)
     if not d:
         return None

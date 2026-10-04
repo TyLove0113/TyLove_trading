@@ -1,36 +1,18 @@
-# Railway 部署設定（2026-10-01 加）
+# Railway 部署設定
 #
-# 為何要呢個檔：截圖 OCR 用嘅 rapidocr 依賴 opencv，而 opencv 需要
-# 系統函式庫 libGL.so.1 —— Railway 嘅精簡容器冇，所以 import cv2 會爆
-# 「libGL.so.1: cannot open shared object file」，令 OCR 顯示「未啟用」。
+# V4（2026-10-04）大幅簡化。
 #
-# ⚠️ 呢個檔淨係加系統函式庫，唔會覆寫 railway.json 嘅 build / start 指令。
+# 背景：之前用 rapidocr 做 OCR，佢依賴 opencv（GUI 版），連住
+# libGL／libxcb／Qt 一整串系統庫。Railway 精簡容器永遠裝唔齊，
+# 每次補完一個就爆下一個，造成長時間無法解決嘅 ImportError。
 #
-# 同時裝 tesseract 做後備：rapidocr 仲有問題時系統會自動退去 tesseract。
-# 2026-10-04 更新：之前只加咗 libgl1／libgomp1 等，但仍然爆
-#   ImportError: libxcb.so.1: cannot open shared object file
-# 原因：opencv-python（非 headless 版）連住 Qt，Qt 需要 xcb 系列。
-# 今次補齊 X11／xcb 一組，令 import cv2 真正成功。
+# V4 改為只用 tesseract（唔需要任何 GUI 系統庫），並喺程式碼加
+# 「2 倍放大 + 自動對比」預處理。實測歷史圖由「漏 1 行、平倉價
+# 4290.43 讀成 290.43」變成 4/4 全部正確。
+#
+# 所以呢個檔而家只需要裝 tesseract 本體。
 [phases.setup]
 aptPkgs = [
-    "libgl1", "libgomp1",            # opencv 必需（rapidocr）
-    "libglib2.0-0",      # opencv 必需
-    "libsm6",            # opencv 影像編解碼
-    "libxext6",
-    "libxcb1",           # ← 2026-10-04 補：libxcb.so.1（今次爆嘅就係呢個）
-    "libx11-6",          # ← Qt／xcb 依賴
-    "libxrender1",       # ← Qt／xcb 依賴
-    "libxcb-shm0",       # ← 少數情況會連住用
-    "libxcb-randr0",
-    # 2026-10-04：ldd libxcb.so.1 實測得出嘅【直接依賴】。
-    # 冇呢幾個，libxcb.so.1 會「存在但載入唔到」。
-    "libxau6", "libxdmcp6", "libbsd0", "libmd0",
-    "tesseract-ocr",     # 後備 OCR 引擎
-    "tesseract-ocr-eng", # 英文＋數字（MT4 介面係英文）
+    "tesseract-ocr",
+    "tesseract-ocr-eng",
 ]
-
-# 2026-10-04：只加 apt 套件唔夠（加完 libxcb1 仍然爆同一個錯）。
-# 改用「唔靠系統庫」嘅做法：喺 build 階段換走 GUI 版 opencv。
-# 呢步有自癒 —— 裝唔到 headless 會自動還原，最差同而家一樣。
-[phases.build]
-cmds = ["sh tools/fix_opencv.sh || true"]

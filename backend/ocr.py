@@ -19,6 +19,7 @@ from __future__ import annotations
 import config
 import io
 import logging
+import os
 import re
 
 log = logging.getLogger("tylove.ocr")
@@ -29,6 +30,57 @@ try:
     _PIL = True
 except Exception:  # noqa: BLE001
     _PIL = False
+
+# ── 系統庫預載（2026-10-04）────────────────────────────────────
+# 症狀：libxcb.so.1 明明存在，但 import cv2 報
+#   "ImportError: libxcb.so.1: cannot open shared object file"
+# 根因：Nixpacks 嘅 Python 由 Nix 提供，佢嘅動態載入器搜尋路徑
+#   唔包含 /usr/lib/x86_64-linux-gnu —— 所以 apt 裝好嘅庫搵唔到。
+#   呢個解釋得通「檔案 ✅ 但載入器話搵唔到」呢個矛盾。
+# 解法：用【絕對路徑】ctypes 預載成條依賴鏈（RTLD_GLOBAL），
+#   之後 cv2 再 dlopen 同名庫就會命中已載入嘅版本，唔使再搜尋。
+_SYSLIB_DIRS = ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
+                "/usr/lib64", "/usr/lib", "/lib", "/usr/local/lib")
+_SYSLIB_CHAIN = (
+    "libmd.so.0", "libbsd.so.0", "libXau.so.6", "libXdmcp.so.6",
+    "libxcb.so.1", "libX11.so.6", "libXext.so.6", "libXrender.so.1",
+    "libGL.so.1", "libgomp.so.1",
+)
+_SYSLIB_LOADED = set()
+_SYSLIB_NOTE = ""
+
+
+def _preload_syslibs() -> str:
+    """預載系統庫鏈。回傳簡短結果，放喺 OCR 狀態供排查。"""
+    global _SYSLIB_NOTE
+    if _SYSLIB_NOTE:
+        return _SYSLIB_NOTE
+    import ctypes
+    got, miss = [], []
+    for name in _SYSLIB_CHAIN:
+        found = False
+        for d in _SYSLIB_DIRS:
+            fp = os.path.join(d, name)
+            if not os.path.exists(fp):
+                continue
+            found = True
+            try:
+                ctypes.CDLL(fp, mode=ctypes.RTLD_GLOBAL)
+                _SYSLIB_LOADED.add(name)
+                got.append(name)
+            except OSError:
+                miss.append(name)
+            break
+        if not found:
+            miss.append(name)
+    _SYSLIB_NOTE = "預載 %d 個成功／%d 個失敗%s" % (
+        len(got), len(miss),
+        ("，失敗：" + "、".join(miss)) if miss else "")
+    return _SYSLIB_NOTE
+
+
+_preload_syslibs()
+
 
 _RAPID, _RAPID_ERR = None, None
 try:
@@ -116,6 +168,7 @@ def status() -> dict:
         errs["pillow"] = "Pillow 未安裝"
     return {
         "syslib": _syslib(),
+        "preload": _preload_syslibs(),
         "available": eng is not None,
         "engine": eng,
         "pillow": _PIL,
@@ -128,7 +181,22 @@ def status() -> dict:
 
 
 # ------------------------------------------------------------------ 讀字
+def _cap_size(img, max_w: int = 2000):
+    """限制影像闊度。手機截圖原圖可到 3000+ px，
+    （a）tesseract 太闊反而易食字，（b）處理大圖用多幾倍記憶體
+    —— 之前容器每次上載圖都重啟，呢個係嫌疑之一。
+    2026-10-04 加。"""
+    try:
+        if img.width > max_w:
+            r = max_w / float(img.width)
+            return img.resize((max_w, max(1, int(img.height * r))))
+    except Exception:  # noqa: BLE001
+        pass
+    return img
+
+
 def _words(img):
+    img = _cap_size(img)
     """回傳 [(x, y, text, conf)]，兩個引擎都歸一化成同一格式。"""
     import numpy as np
     r = _rapid()

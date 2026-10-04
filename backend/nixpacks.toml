@@ -22,6 +22,9 @@ aptPkgs = [
     "libxrender1",       # ← Qt／xcb 依賴
     "libxcb-shm0",       # ← 少數情況會連住用
     "libxcb-randr0",
+    # 2026-10-04：ldd libxcb.so.1 實測得出嘅【直接依賴】。
+    # 冇呢幾個，libxcb.so.1 會「存在但載入唔到」。
+    "libxau6", "libxdmcp6", "libbsd0", "libmd0",
     "tesseract-ocr",     # 後備 OCR 引擎
     "tesseract-ocr-eng", # 英文＋數字（MT4 介面係英文）
 ]

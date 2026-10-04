@@ -41,3 +41,15 @@ v5.0（2026-10-04）
    之前只知「import 失敗」，分唔清「冇裝到」定「裝咗搵唔到」——
    兩者修法完全唔同。
  · 網頁顯示系統庫實況。
+
+v5.1（2026-10-04）── 真正修好 rapidocr 載入失敗
+ · 根因（有證據，唔係猜）：libxcb.so.1 檔案存在，但載入器報
+   「cannot open shared object file」。原因係 Nixpacks 用 Nix 提供嘅
+   Python，佢嘅動態載入器搜尋路徑唔包含 /usr/lib/x86_64-linux-gnu，
+   所以 apt 裝好嘅庫搵唔到。
+ · 修法：ocr.py 開頭用【絕對路徑】ctypes 預載成條依賴鏈
+   （ldd libxcb.so.1 得出嘅順序），RTLD_GLOBAL 令 cv2 之後命中。
+ · nixpacks.toml 補 libxcb 嘅直接依賴：libxau6／libxdmcp6／libbsd0／libmd0。
+ · requirements.txt 補 Pillow（唔再靠間接依賴）。
+ · _cap_size：影像闊度上限 2000px（大圖拖慢又用多記憶體）。
+ · 由 ~/output 最新版重建 —— 之前誤用 ~/Yukie 嘅舊 zip，丟失過 analyze。

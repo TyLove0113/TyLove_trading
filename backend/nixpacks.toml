@@ -25,3 +25,9 @@ aptPkgs = [
     "tesseract-ocr",     # 後備 OCR 引擎
     "tesseract-ocr-eng", # 英文＋數字（MT4 介面係英文）
 ]
+
+# 2026-10-04：只加 apt 套件唔夠（加完 libxcb1 仍然爆同一個錯）。
+# 改用「唔靠系統庫」嘅做法：喺 build 階段換走 GUI 版 opencv。
+# 呢步有自癒 —— 裝唔到 headless 會自動還原，最差同而家一樣。
+[phases.build]
+cmds = ["sh tools/fix_opencv.sh || true"]

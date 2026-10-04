@@ -89,6 +89,22 @@ def engine() -> str | None:
     return None
 
 
+def _syslib() -> dict:
+    """診斷用：三個關鍵系統庫喺唔喺度。
+
+    2026-10-04 加。之前只知「rapidocr import 失敗」，
+    但分唔清係「套件冇裝到」定「裝咗但載入器搵唔到」——
+    兩者修法完全唔同，所以要分開報。
+    """
+    import os
+    dirs = ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib64",
+            "/usr/lib", "/lib", "/usr/local/lib", "/opt/venv/lib")
+    out = {}
+    for f in ("libGL.so.1", "libxcb.so.1", "libgomp.so.1"):
+        out[f] = any(os.path.exists(os.path.join(d, f)) for d in dirs)
+    return out
+
+
 def status() -> dict:
     eng = engine()
     errs = {}
@@ -99,6 +115,7 @@ def status() -> dict:
     if not _PIL:
         errs["pillow"] = "Pillow 未安裝"
     return {
+        "syslib": _syslib(),
         "available": eng is not None,
         "engine": eng,
         "pillow": _PIL,

@@ -31,3 +31,13 @@ v4.9（2026-10-04）
    加齊之後主引擎應該起得返，OCR 準確度會返到沙盒測試嘅水平。
  · ocr.py 加 analyze()：同一張圖只跑一次 OCR（之前每個請求跑兩次）。
    雙倍記憶體係容器重啟、進而令 Telegram 重複讀圖嘅嫌疑之一。
+
+v5.0（2026-10-04）
+ · 唔再靠系統庫：build 階段跑 tools/fix_opencv.sh，將 GUI 版 opencv
+   換成 opencv-python-headless。libGL／libxcb 係 Qt／X11 嘅依賴，
+   headless 版完全唔需要 —— 補庫嘅路走唔通就繞過去。
+   腳本有自癒：headless 裝唔到會自動還原，最差同而家一樣。
+ · ocr.status() 加 syslib：分開報 libGL／libxcb／libgomp 喺唔喺度。
+   之前只知「import 失敗」，分唔清「冇裝到」定「裝咗搵唔到」——
+   兩者修法完全唔同。
+ · 網頁顯示系統庫實況。

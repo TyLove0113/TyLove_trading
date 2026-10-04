@@ -313,7 +313,10 @@ async function jOcrStatus(){
       else {
         const rows = Object.entries(d.errors || {})
           .map(([k,v]) => '<div><b>' + k + '</b>：' + v + '</div>').join('');
+        const sl = Object.entries(d.syslib || {})
+          .map(([k, v]) => k + ' ' + (v ? '✅' : '❌')).join('　');
         er.innerHTML = '<b>⚠️ 主引擎 rapidocr 未載入（截圖俾我睇呢段）</b>'
+          + '<div>系統庫：' + (sl || '（無資料）') + '</div>'
           + '<div>rapidocr ' + (d.rapidocr_import ? '✅' : '❌')
           + '／pytesseract ' + (d.tesseract_import ? '✅' : '❌')
           + '／tesseract 執行檔 ' + (d.tesseract_binary ? '✅' : '❌') + '</div>'

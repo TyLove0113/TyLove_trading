@@ -126,39 +126,58 @@ def _cap_size(img, max_w: int = 2000):
 
 
 def _words(img):
-    """回傳 [(x, y, text, conf)]（座標已還原成原圖比例）。
+    """回傳 [(x, y, text, conf)]。
 
-    V4（2026-10-04）：只用 tesseract，拆走 rapidocr／opencv（唔再需要
-    任何 GUI 系統庫）。加「2 倍放大 + 自動對比」預處理 —— 實測歷史圖由
-    「漏 1 行 + 平倉價 4290.43 讀成 290.43」變成 4/4 全部正確。
+    V4.2（2026-10-05）：多尺度 OCR + 投票合併。
+    原因：Telegram 會壓縮相片，壓縮後某個放大倍數會食字／漏行，
+    而且同一張圖跑唔同尺度會漏唔同嘅行（實測 4/4 / 3/4 / 2/4 飄）。
+    解法：跑三個尺度，同一位置多數票為準，再取聯集 → 補返漏行。
     """
     img = _cap_size(img)
     if not _tess_ok():
         return []
     import pytesseract
     from PIL import ImageOps
-    im = img.convert("L")
-    scale = 2.0
-    if im.width * scale > 2600:
-        scale = max(1.0, 2600.0 / im.width)
-    if scale > 1.0:
-        im = im.resize((int(im.width * scale), int(im.height * scale)), Image.LANCZOS)
-    im = ImageOps.autocontrast(im)
-    d = pytesseract.image_to_data(im, lang="eng",
-                                  output_type=pytesseract.Output.DICT,
-                                  config="--psm 6")
-    out = []
-    for i, tok in enumerate(d["text"]):
-        tok = (tok or "").strip()
-        if not tok:
+
+    base = img.convert("L")
+    buckets = {}   # (x//DX, y//DY) → {text: [conf, 票數]}
+    DX, DY = 14, 6  # 位置分格：同一格視為同一欄位
+
+    for scale in (2.0, 3.0, 1.5):
+        w = int(base.width * scale)
+        if w > 4200:
             continue
+        im = base.resize((w, int(base.height * scale)), Image.LANCZOS)
+        im = ImageOps.autocontrast(im)
         try:
-            conf = float(d["conf"][i]) / 100.0
-        except (TypeError, ValueError):
+            d = pytesseract.image_to_data(im, lang="eng",
+                                          output_type=pytesseract.Output.DICT,
+                                          config="--psm 6")
+        except Exception:
             continue
-        if conf <= 0:
-            continue
-        out.append((float(d["left"][i]) / scale, float(d["top"][i]) / scale, tok, conf))
+        for k, tok in enumerate(d["text"]):
+            tok = (tok or "").strip()
+            if not tok:
+                continue
+            try:
+                conf = float(d["conf"][k]) / 100.0
+            except (TypeError, ValueError):
+                continue
+            if conf <= 0:
+                continue
+            x = float(d["left"][k]) / scale
+            y = float(d["top"][k]) / scale
+            key = (int(x // DX), int(y // DY))
+            b = buckets.setdefault(key, {})
+            e = b.setdefault(tok, [0.0, 0])
+            e[0] = max(e[0], conf)
+            e[1] += 1
+
+    out = []
+    for (gx, gy), cand in buckets.items():
+        # 同一格多個候選：票數高者勝，同票比信心
+        tok, (conf, votes) = max(cand.items(), key=lambda kv: (kv[1][1], kv[1][0]))
+        out.append((gx * DX + DX / 2.0, gy * DY + DY / 2.0, tok, conf))
     return out
 
 
@@ -286,6 +305,23 @@ def _rows(data) -> list[dict]:
             merged.append(row[i])
             i += 1
         row = merged
+
+        # ⚠️ 2026-10-05 V4.3：多尺度投票會令同一欄位分裂成兩個 token
+        #    （y 相差幾 px 就落入唔同格）→ 同一行多咗一個日期 →
+        #    opened_at 攞錯（實測第 3 筆變 00:00 / 09:08，應該係 09:08 / 10:00）。
+        #    呢度去掉「文字相同 + x 幾乎相同」嘅重複，保留信心較高者。
+        dedup = []
+        for w in row:
+            dup = None
+            for k, d in enumerate(dedup):
+                if w[2] == d[2] and abs(w[0] - d[0]) < 8:
+                    dup = k
+                    break
+            if dup is None:
+                dedup.append(w)
+            elif w[3] > dedup[dup][3]:
+                dedup[dup] = w
+        row = dedup
 
         got = {"ticket": ttxt}
         dates, prices, extra = [], [], []

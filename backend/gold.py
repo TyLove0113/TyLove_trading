@@ -242,8 +242,14 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     trend_dn = float(last["ema20"]) < float(last["ema50"])
     rsi = float(last["rsi"]) if pd.notna(last["rsi"]) else 50.0
 
-    prev_up = float(prev["Close"]) > float(prev["hh"]) if pd.notna(prev["hh"]) else False
-    prev_dn = float(prev["Close"]) < float(prev["ll"]) if pd.notna(prev["ll"]) else False
+    # ⚠️ 2026-10-05 修：原本用 prev["hh"]／prev["ll"]，即係上一支【自己嗰條】
+    #    通道（rolling(20).shift(1)，窗口已經移位）。價位一旦持續趨勢，
+    #    每一支都「有穿自己嗰條」，prev_dn 永遠 True → not prev_dn 永遠 False
+    #    → 正式訊號永遠唔出（實測漏 39% 突破，整日 0 訊號只得預警）。
+    #    改為同【當前支】同一條通道比，語意先至正確：
+    #    「上一支收盤喺通道內、今支收盤喺通道外」＝ 真正嘅新突破。
+    prev_up = float(prev["Close"]) > float(last["hh"]) if pd.notna(last["hh"]) else False
+    prev_dn = float(prev["Close"]) < float(last["ll"]) if pd.notna(last["ll"]) else False
 
     # 顯示用嘅價一律扣校正，同入場／止蝕／目標保持一致
     # （用券商真實報價時 effective_offset() = 0，即係原價顯示）

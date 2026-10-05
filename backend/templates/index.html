@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TyLove Trading — 短炒分析</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body{background:#0b1020;color:#e6ebff;font-family:-apple-system,"PingFang HK","Microsoft JhengHei",sans-serif}
+  .card{background:#141a30;border:1px solid #222c4d;border-radius:14px}
+  .pos{color:#34d399}.neg{color:#f87171}
+  .tag{border-radius:6px;padding:1px 7px;font-size:11px}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #1e2743;font-size:13px;white-space:nowrap}
+  th{color:#8ea0c9;font-weight:500;font-size:12px}
+  .scroll{overflow-x:auto}
+  .inp{background:#0e1428;border:1px solid #2a3560;border-radius:9px;padding:9px 11px;font-size:13px;color:#e6ebff;width:100%}
+  .inp:focus{outline:none;border-color:#4f46e5}
+  .btn{border-radius:9px;padding:9px 15px;font-size:13px;cursor:pointer;border:none;color:#fff}
+  .btn-p{background:#4f46e5}.btn-p:hover{background:#6366f1}
+  .btn-s{background:#334155}.btn-s:hover{background:#475569}
+</style>
+</head>
+<body class="p-4 md:p-8">
+<!-- 資料庫持久化警告 + 備份（由 /api/db-status 更新） -->
+<div id="dbBar" class="hidden mb-4 px-4 py-3 rounded-xl text-sm leading-relaxed"></div>
+
+<div class="max-w-6xl mx-auto">
+
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+    <div>
+      <h1 class="text-2xl font-semibold">TyLove Trading</h1>
+      <p class="text-sm text-slate-400">短炒分析系統 · 買入由你本人執行</p>
+    </div>
+    <div class="flex gap-2">
+      <a href="/gold" class="btn btn-s">🥇 黃金</a>
+      <button onclick="act('/api/scan','掃描已開始，約一至兩分鐘後更新')" class="btn btn-p">立即掃描</button>
+      <button onclick="act('/api/monitor','持倉已更新')" class="btn btn-s">更新持倉</button>
+    </div>
+  </div>
+
+  <div id="banner" class="hidden card p-3 mb-4 text-sm"></div>
+
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+    <div class="card p-4"><div class="text-xs text-slate-400">上次掃描</div><div id="lastScan" class="text-sm mt-1">—</div></div>
+    <div class="card p-4"><div class="text-xs text-slate-400">達標股票</div><div id="nSignals" class="text-xl mt-1">0</div></div>
+    <div class="card p-4"><div class="text-xs text-slate-400">持倉中</div><div id="nPos" class="text-xl mt-1">0</div></div>
+    <div class="card p-4"><div class="text-xs text-slate-400">累積勝率</div><div id="winRate" class="text-xl mt-1">—</div></div>
+  </div>
+
+  <div id="allowBox" class="hidden card p-3 mb-6 text-sm"></div>
+
+  <h2 class="text-lg font-semibold mb-3">📌 今日訊號（含止蝕止賺）</h2>
+  <div id="signals" class="space-y-3 mb-8"></div>
+
+  <!-- ===================== 持倉管理 ===================== -->
+  <h2 class="text-lg font-semibold mb-3">💼 持倉管理</h2>
+  <div class="card p-4 mb-4">
+    <div class="text-sm text-slate-300 mb-1">新增持倉</div>
+    <div class="text-xs text-slate-500 mb-3">
+      你喺富途買入之後，返嚟呢度填返記錄。<b>只需要填代號、入場價、股數</b>，
+      止蝕同目標會自動用 ATR 幫你計（留空即可）；想自己定就照填。
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-2">
+      <input id="pSymbol" class="inp" placeholder="代號 0700.HK" />
+      <input id="pEntry"  class="inp" type="number" step="any" placeholder="入場價" />
+      <input id="pQty"    class="inp" type="number" step="any" placeholder="股數" />
+      <input id="pStop"   class="inp" type="number" step="any" placeholder="止蝕（可留空）" />
+      <input id="pT1"     class="inp" type="number" step="any" placeholder="目標一（可留空）" />
+      <input id="pT2"     class="inp" type="number" step="any" placeholder="目標二（可留空）" />
+    </div>
+    <div class="flex items-center gap-3 mt-3">
+      <button onclick="addPosition()" class="btn btn-p">＋ 新增持倉</button>
+      <span id="posMsg" class="text-xs text-slate-500"></span>
+    </div>
+  </div>
+  <div id="positions" class="mb-8"></div>
+<!-- 過往交易記錄（已平倉）-->
+<div class="card p-4 mb-8">
+  <div class="text-sm font-semibold mb-3">📜 過往交易記錄</div>
+  <div id="histStats" class="mb-3"></div>
+  <div id="histList" class="text-xs text-slate-400">載入中…</div>
+</div>
+
+
+  <!-- ===================== 風控參數 ===================== -->
+  <h2 class="text-lg font-semibold mb-3">⚙️ 風控參數（改完即時生效）</h2>
+  <div class="card p-4 mb-8">
+    <div id="settings" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+    <div class="flex flex-wrap items-center gap-3 mt-5">
+      <button onclick="saveSettings()" class="btn btn-p">儲存參數</button>
+      <button onclick="resetSettings()" class="btn btn-s">回復預設</button>
+      <span id="setMsg" class="text-xs text-slate-500"></span>
+    </div>
+    <div class="text-xs text-slate-500 mt-3">
+      呢啲設定會存喺資料庫，優先過 <code>.env</code>。改完即刻影響下一次掃描同交易計劃，唔需要重新部署。
+    </div>
+  </div>
+
+  <h2 class="text-lg font-semibold mb-3">📊 全部股票評分</h2>
+  <div class="card scroll mb-8">
+    <table><thead><tr>
+      <th>代號</th><th>名稱</th><th>總分</th><th>技術</th><th>現價</th>
+      <th>RSI</th><th>ATR%</th><th>量比</th><th>狀態</th>
+    </tr></thead><tbody id="allBody"></tbody></table>
+  </div>
+
+  <h2 class="text-lg font-semibold mb-3">🚫 新聞否決</h2>
+  <div id="vetoed" class="card p-4 mb-8 text-sm text-slate-400">載入中…</div>
+
+  <h2 class="text-lg font-semibold mb-3">📰 新聞動態（近 48 小時）</h2>
+  <div id="newsBox" class="mb-10"></div>
+
+  <p class="text-xs text-slate-500 pb-10">
+    本工具只提供分析，不代客下單。所有買賣決定由使用者本人執行。
+    訊號僅供參考，投資涉及風險。
+  </p>
+</div>
+
+<script>
+
+// ================= 資料庫持久化 + 備份 =================
+async function loadDbStatus() {
+  const bar = document.getElementById('dbBar');
+  if (!bar) return;
+  try {
+    const d = await (await fetch('/api/db-status')).json();
+    bar.classList.remove('hidden');
+    const rec = d.record_rows || 0;
+    const feed = d.feed_rows || 0;
+    const labels = {gold_trades:'交易日誌', positions:'持倉', signals:'港股訊號',
+                    gold_signals:'黃金訊號', gold_alerts:'預警', settings:'設定',
+                    equity:'資金曲線'};
+    const detail = Object.entries(d.records || {})
+      .filter(function(kv){ return kv[1] > 0; })
+      .map(function(kv){ return (labels[kv[0]] || kv[0]) + ' ' + kv[1]; })
+      .join('・') || '（暫時冇記錄）';
+
+    const dl = '<a href="/api/backup" download class="underline font-semibold">'
+      + '\u2b07\ufe0f \u532f\u51fa\u5099\u4efd</a>';
+    const up = '<button onclick="document.getElementById(\'restoreFile\').click()" '
+      + 'class="underline font-semibold">\u2b06\ufe0f \u532f\u5165</button>'
+      + '<input type="file" id="restoreFile" accept=".json" class="hidden" '
+      + 'onchange="doRestore(this)">';
+
+    if (d.persistent) {
+      bar.style.background = '#052e16';
+      bar.style.border = '1px solid #166534';
+      bar.style.color = '#86efac';
+      bar.innerHTML = '\u2705 <b>\u8a18\u9304\u6703\u81ea\u52d5\u4fdd\u5b58</b>'
+        + ' \u2014\u2014 \u8cc7\u6599\u5eab\u55ba Volume \u4e0a\u9762'
+        + '<div class="mt-1 text-xs opacity-90">\u4f60\u5605\u8a18\u9304 <b>'
+        + rec + ' \u7b46</b>\uff1a' + detail
+        + '\uff08\u53e6\u52a0\u81ea\u52d5\u6536\u96c6\u5605\u5831\u50f9\u6578\u64da '
+        + feed + ' \u7b46\uff09</div>'
+        + '<div class="mt-2 text-xs opacity-90">' + d.size_kb + ' KB</div>'
+        + '<div class="mt-2">' + dl + '\u3000' + up + '</div>';
+      return;
+    }
+    bar.style.background = '#2A1215';
+    bar.style.border = '1px solid #7F1D1D';
+    bar.style.color = '#fca5a5';
+    bar.innerHTML = '\ud83d\udea8 <b>\u8a18\u9304\u5514\u6703\u81ea\u52d5\u4fdd\u5b58\uff01</b>'
+      + '\u6bcf\u6b21\u66f4\u65b0\u7a0b\u5f0f\u90fd\u6703\u6e05\u7a7a\u6240\u6709\u8a18\u9304'
+      + '<div class="mt-1 text-xs opacity-90">\u76ee\u524d\u4f60\u5605\u8a18\u9304 <b>'
+      + rec + ' \u7b46</b>\uff1a' + detail + '</div>'
+      + '<div class="mt-2 text-xs opacity-90">\u505a\u6cd5\uff1aRailway \u2192 '
+      + '\u670d\u52d9 \u2192 Settings \u2192 Volumes \u639b\u4e00\u500b\u53bb '
+      + '<code>/data</code>\uff0c\u518d\u55ba Variables \u52a0 '
+      + '<code>DB_PATH=/data/tylove.db</code>\u3002</div>'
+      + '<div class="mt-2"><b>\u672a\u641e\u597d\u4e4b\u524d\uff0c\u843d\u5b8c\u55ae'
+      + '\u8a18\u5f97\u64f3\uff1a</b></div>'
+      + '<div class="mt-2">' + dl + '\u3000' + up + '</div>';
+  } catch (e) {
+    bar.classList.remove('hidden');
+    bar.textContent = '\uff08\u8b80\u5514\u5230\u8cc7\u6599\u5eab\u72c0\u614b\uff09';
+  }
+}
+
+function doBackup() {
+  const a = document.createElement('a');
+  a.href = '/api/backup';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function doRestore(input) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('file', f);
+  try {
+    const d = await (await fetch('/api/restore', {method: 'POST', body: fd})).json();
+    alert(d.ok ? ('✅ 還原完成，共 ' + d.total + ' 筆記錄') : ('❌ ' + (d.error || '還原失敗')));
+  } catch (e) {
+    alert('❌ 還原失敗：' + e);
+  }
+  input.value = '';
+  loadDbStatus();
+  if (typeof loadJournal === 'function') loadJournal();
+  if (typeof load === 'function') load();
+}
+const $ = id => document.getElementById(id);
+function banner(msg, ok=true){
+  const b=$('banner'); b.className='card p-3 mb-4 text-sm '+(ok?'text-emerald-300':'text-rose-300');
+  b.textContent=msg; b.classList.remove('hidden'); setTimeout(()=>b.classList.add('hidden'),4000);
+}
+async function act(url,msg){ banner(msg); await fetch(url,{method:'POST'}); setTimeout(load, 4000); }
+function cls(v){return v>=70?'tag bg-emerald-900 text-emerald-300':v>=55?'tag bg-amber-900 text-amber-300':'tag bg-slate-800 text-slate-400';}
+
+function signalCard(s){
+  const p=s.plan||{}, n=s.news||{};
+  const notes=(s.notes||[]).filter(x=>x.includes('+')).slice(0,4).join(' · ');
+  return `<div class="card p-4">
+    <div class="flex justify-between items-start mb-3">
+      <div><span class="font-semibold text-lg">${s.symbol}</span> <span class="text-slate-400">${s.name||''}</span>
+        ${s.intraday?`<div class="text-xs text-slate-500 mt-1">${s.intraday}</div>`:''}</div>
+      <div class="text-right"><div class="text-2xl font-semibold ${s.total_score>=75?'pos':''}">${s.total_score}</div>
+        <div class="text-xs text-slate-500">技術 ${s.technical_score}　新聞 ${s.news_penalty>=0?'−'+s.news_penalty:'+'+(-s.news_penalty)}</div></div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
+      <div><div class="text-xs text-slate-500">入場</div><div>${p.entry??'—'}</div></div>
+      <div><div class="text-xs text-slate-500">止蝕</div><div class="neg">${p.stop_loss??'—'} (${p.stop_pct??''}%)</div></div>
+      <div><div class="text-xs text-slate-500">目標一（減半）</div><div class="pos">${p.target1??'—'} (${p.target1_pct??''}%)</div></div>
+      <div><div class="text-xs text-slate-500">目標二（清倉）</div><div class="pos">${p.target2??'—'} (${p.target2_pct??''}%)</div></div>
+    </div>
+    <div class="text-xs text-slate-400 mb-2">建議注碼 <b class="text-slate-200">${p.shares??0} 股</b>
+      · 約 HK$${(p.capital_used||0).toLocaleString()} · 最大虧損 HK$${(p.max_loss_hkd||0).toLocaleString()}
+      · 風險回報比 ${p.rr_ratio??'—'}</div>
+    ${n.catalyst?`<div class="text-xs text-indigo-300 mb-1">催化劑：${n.catalyst}</div>`:''}
+    ${n.reason?`<div class="text-xs text-slate-500 mb-1">新聞：${n.reason}</div>`:''}
+    ${notes?`<div class="text-xs text-slate-500">${notes}</div>`:''}
+    <div class="mt-3">
+      <button onclick="fillFromSignal('${s.symbol}',${p.entry||s.price})" class="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600">記錄成持倉 →</button>
+    </div>
+  </div>`;
+}
+
+function posCard(p){
+  const icon={EXIT:'🔴',TRIM:'🟡',WATCH:'🟠',HOLD:'🟢'}[p.action]||'⚪';
+  const has = p.pnl_pct!==undefined && p.pnl_pct!==null;
+  return `<div class="card p-4 mb-3">
+    <div class="flex justify-between items-start gap-3">
+      <div class="font-semibold">${icon} ${p.symbol} <span class="text-slate-400 font-normal text-sm">${p.name||''}</span></div>
+      <div class="text-right">
+        ${has?`<div class="${p.pnl_pct>=0?'pos':'neg'} font-semibold">${p.pnl_pct>=0?'+':''}${p.pnl_pct}%　HK$${(p.pnl_hkd||0).toLocaleString()}</div>`
+             :'<div class="text-xs text-slate-500">現價未更新 · 按右上角「更新持倉」</div>'}
+        <button onclick="closePosition(${p.id},'${p.symbol}',${p.entry_price})" class="mt-2 text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600">平倉</button>
+      </div>
+    </div>
+    <div class="text-xs text-slate-400 mt-2">
+      入場 <b class="text-slate-200">${p.entry_price}</b> × ${p.qty} 股
+      ｜止蝕 <span class="neg">${p.stop_loss??'—'}</span>${p.dist_to_stop_pct!==undefined?`（距 ${p.dist_to_stop_pct}%）`:''}
+      ${p.target1?`｜目標一 <span class="pos">${p.target1}</span>${p.dist_to_target1_pct!==undefined?`（距 ${p.dist_to_target1_pct}%）`:''}`:''}
+      ${p.price?`｜現價 ${p.price}`:''}
+    </div>
+    ${p.reason?`<div class="text-sm mt-2">建議：<b>${p.action||''}</b> — ${p.reason}</div>`:''}
+    <div class="text-xs text-slate-600 mt-1">開倉 ${(p.opened_at||'').slice(0,16)}</div>
+  </div>`;
+}
+
+function fillFromSignal(symbol, entry){
+  $('pSymbol').value=symbol;
+  if(entry) $('pEntry').value=entry;
+  $('pQty').value=''; $('pStop').value=''; $('pT1').value=''; $('pT2').value='';
+  $('posMsg').className='text-xs text-slate-400';
+  $('posMsg').textContent='已填入代號同現價，請補上你實際嘅入場價同股數';
+  window.scrollTo({top:$('pSymbol').getBoundingClientRect().top+window.scrollY-120, behavior:'smooth'});
+  $('pQty').focus();
+}
+
+async function addPosition(){
+  const msg=$('posMsg');
+  const body={
+    symbol:($('pSymbol').value||'').trim().toUpperCase(),
+    entry_price:$('pEntry').value, qty:$('pQty').value,
+    stop_loss:$('pStop').value, target1:$('pT1').value, target2:$('pT2').value
+  };
+  if(!body.symbol || !body.entry_price || !body.qty){
+    msg.className='text-xs text-rose-300'; msg.textContent='代號、入場價、股數三樣必須填'; return;
+  }
+  msg.className='text-xs text-slate-400'; msg.textContent='儲存中…（會自動幫你計算止蝕止賺，約需幾秒）';
+  try{
+    const r=await fetch('/api/positions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!d.ok){ msg.className='text-xs text-rose-300'; msg.textContent='❌ '+(d.error||'新增失敗'); return; }
+    msg.className='text-xs text-emerald-300';
+    msg.textContent=`✅ 已新增　止蝕 ${d.stop_loss}　目標一 ${d.target1}　目標二 ${d.target2}`;
+    ['pSymbol','pEntry','pQty','pStop','pT1','pT2'].forEach(i=>$(i).value='');
+    banner('持倉已新增，已開始監控');
+    load();
+  }catch(e){
+    msg.className='text-xs text-rose-300'; msg.textContent='❌ 網絡錯誤，請重試';
+  }
+}
+
+async function closePosition(id, symbol, entry){
+  const px = prompt(`平倉 ${symbol}（入場價 ${entry}）\n\n請輸入你實際嘅賣出價：`, '');
+  if(!px) return;
+  try{
+    const r=await fetch(`/api/positions/${id}/close`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({exit_price:px, reason:'手動平倉'})});
+    const d=await r.json();
+    banner(d.ok?'已平倉並記錄成績':'平倉失敗', d.ok);
+    if(d.ok) load();
+  }catch(e){ banner('網絡錯誤，平倉失敗', false); }
+}
+
+/* ---------------- 風控參數 ---------------- */
+let SPEC=null;
+async function loadSettings(){
+  try{
+    const r=await fetch('/api/settings'); const d=await r.json();
+    SPEC=d.spec||{};
+    $('settings').innerHTML = Object.entries(SPEC).map(([k,s])=>`
+      <div>
+        <label class="text-xs text-slate-400">${s.label}${s.unit?`（${s.unit}）`:''}</label>
+        <div class="flex items-center gap-2 mt-1">
+          <input id="set_${k}" class="inp" type="number" ${s.type==='int'?'step="1"':'step="any"'}
+                 min="${s.min}" max="${s.max}" value="${d.values[k]}"/>
+          <span class="text-xs text-slate-600 whitespace-nowrap">${s.min}–${s.max}</span>
+        </div>
+        <div class="text-xs text-slate-500 mt-1">${s.hint||''}</div>
+      </div>`).join('');
+  }catch(e){ $('settings').innerHTML='<div class="text-xs text-rose-300">讀取設定失敗</div>'; }
+}
+async function pushSettings(payload, okMsg){
+  const m=$('setMsg');
+  try{
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const d=await r.json();
+    m.className='text-xs '+(d.ok?'text-emerald-300':'text-rose-300');
+    m.textContent = d.ok ? okMsg : '❌ '+(d.error||'儲存失敗');
+    if(d.ok){ banner('風控參數已更新，即時生效'); loadSettings(); load(); }
+  }catch(e){ m.className='text-xs text-rose-300'; m.textContent='❌ 網絡錯誤'; }
+}
+function saveSettings(){
+  const body={};
+  Object.keys(SPEC||{}).forEach(k=>{ const el=$('set_'+k); if(el) body[k]=el.value; });
+  pushSettings(body,'✅ 已儲存，即時生效');
+}
+function resetSettings(){
+  if(!confirm('確定回復到 .env 嘅預設值？')) return;
+  pushSettings({__reset__:true},'✅ 已回復預設');
+}
+
+async function load(){
+  const r = await fetch('/api/state'); const d = await r.json();
+  $('lastScan').textContent = d.last_scan || '尚未掃描';
+  $('nSignals').textContent = (d.signals||[]).length;
+  const raw = d.open_positions||[], enriched = d.positions||[];
+  const list = raw.map(x=>Object.assign({}, x, enriched.find(y=>y.symbol===x.symbol)||{}, {id:x.id}));
+  $('nPos').textContent = list.length;
+  const st = d.stats||{};
+  $('winRate').textContent = st.trades ? st.win_rate+'% ('+st.trades+'筆)' : '—';
+
+  const a = d.allow_new||{};
+  const ab=$('allowBox');
+  if(a.reason){ ab.textContent='📋 倉位提示：'+a.reason; ab.classList.remove('hidden'); }
+  else ab.classList.add('hidden');
+
+  $('signals').innerHTML = (d.signals||[]).length
+    ? d.signals.map(signalCard).join('')
+    : '<div class="card p-4 text-sm text-slate-400">今日暫無股票達到入場門檻。寧願唔做，都好過亂做。</div>';
+
+  $('positions').innerHTML = list.length
+    ? list.map(posCard).join('')
+    : '<div class="card p-4 text-sm text-slate-400">手上沒有持倉。買入之後喺上面「新增持倉」記低，程式就會幫你盯住止蝕同目標。</div>';
+
+  $('allBody').innerHTML = (d.all||[]).map(s=>{
+    const sn=s.snapshot||{};
+    return `<tr><td>${s.symbol}</td><td>${s.name||''}</td>
+      <td><span class="${cls(s.total_score)}">${s.total_score}</span></td>
+      <td>${s.technical_score}</td><td>${s.price}</td>
+      <td>${(sn.rsi||0).toFixed(0)}</td><td>${(sn.atr_pct||0).toFixed(1)}%</td>
+      <td>${(sn.vol_ratio||0).toFixed(1)}x</td>
+      <td>${s.veto?'<span class="tag bg-rose-900 text-rose-300">否決</span>':(s.pass_filter?'<span class="tag bg-emerald-900 text-emerald-300">通過</span>':'<span class="tag bg-slate-800 text-slate-400">'+s.filter_reason+'</span>')}</td></tr>`;
+  }).join('');
+
+  $('vetoed').innerHTML = (d.vetoed||[]).length
+    ? d.vetoed.map(v=>`<div class="mb-2"><b>${v.symbol} ${v.name}</b> — ${(v.news||{}).reason||''}</div>`).join('')
+    : '✅ 今日無股票觸發新聞否決（即無重大負面事件）';
+
+  renderNews(d.all||[]);
+}
+
+function newsTag(n){
+  if(n.veto) return ['重大負面','bg-rose-900 text-rose-300'];
+  if(n.sentiment==='positive') return ['偏正面','bg-emerald-900 text-emerald-300'];
+  if(n.sentiment==='negative') return ['偏負面','bg-amber-900 text-amber-300'];
+  return ['中性','bg-slate-800 text-slate-400'];
+}
+
+function renderNews(rows){
+  const box=$('newsBox');
+  if(!rows.length){ box.innerHTML='<div class="card p-4 text-sm text-slate-400">尚未掃描。按右上角「立即掃描」開始。</div>'; return; }
+  const withNews = rows.filter(s=>s.news && (((s.news.titles||[]).length>0) || s.news.reason));
+  if(!withNews.length){ box.innerHTML='<div class="card p-4 text-sm text-slate-400">本次掃描嘅股票都未抓到相關新聞。</div>'; return; }
+  box.innerHTML = withNews.map(s=>{
+    const n=s.news||{}, t=newsTag(n), items=(n.titles||[]).slice(0,4);
+    return `<div class="card p-4 mb-3">
+      <div class="flex justify-between items-center mb-2">
+        <div><span class="font-semibold">${s.symbol}</span> <span class="text-slate-400 text-sm">${s.name||''}</span></div>
+        <span class="tag ${t[1]}">${t[0]}</span>
+      </div>
+      ${items.length
+        ? `<ul class="text-sm text-slate-300 list-disc pl-5 space-y-1">${items.map(x=>`<li>${x}</li>`).join('')}</ul>`
+        : '<div class="text-sm text-slate-400">近 48 小時無相關新聞</div>'}
+      ${n.catalyst?`<div class="text-xs text-indigo-300 mt-2">催化劑：${n.catalyst}</div>`:''}
+      ${n.reason?`<div class="text-xs text-slate-500 mt-1">判斷：${n.reason}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+async function loadHistory(){
+  try{
+    const r = await fetch('/api/positions');
+    const d = await r.json();
+    const st = d.stats || {}, rows = d.closed || [];
+    $('histStats').innerHTML = st.trades
+      ? `<div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">`
+        + [['已平倉', st.trades+' 筆'],['勝率', st.win_rate+'%'],
+           ['已實現盈虧', (st.total_pnl_hkd>=0?'+':'')+'HK$'+st.total_pnl_hkd],
+           ['平均贏', '+'+st.avg_win_pct+'%'],['平均輸', st.avg_loss_pct+'%']]
+          .map(([k,v])=>`<div class="p-2 rounded-lg bg-slate-800/60">
+            <div class="text-[10px] text-slate-500">${k}</div>
+            <div class="font-semibold">${v}</div></div>`).join('')
+        + `</div>`
+      : '<div class="text-xs text-slate-400">仲未有已平倉記錄。平倉之後呢度會自動出現，並累積勝率同盈虧。</div>';
+
+    $('histList').innerHTML = rows.length
+      ? `<div class="overflow-x-auto"><table class="w-full text-[11px]">
+          <thead class="text-slate-500"><tr>
+            <th class="text-left py-1 pr-2">平倉時間</th>
+            <th class="text-left pr-2">股票</th>
+            <th class="text-right pr-2">買入</th>
+            <th class="text-right pr-2">賣出</th>
+            <th class="text-right pr-2">盈虧</th>
+            <th class="text-left">原因</th></tr></thead>
+          <tbody>${rows.map(x=>{
+            const p = (x.exit_price!=null && x.entry_price)
+                    ? (x.exit_price/x.entry_price-1)*100 : null;
+            return `<tr class="border-t border-slate-800">
+              <td class="py-1.5 pr-2 whitespace-nowrap">${(x.closed_at||'').slice(5,16).replace('T',' ')}</td>
+              <td class="pr-2">${x.symbol} <span class="text-slate-500">${x.name||''}</span></td>
+              <td class="text-right pr-2">${x.entry_price}</td>
+              <td class="text-right pr-2">${x.exit_price ?? '—'}</td>
+              <td class="text-right pr-2" style="color:${(p??0)>=0?'#86efac':'#fca5a5'}">${p==null?'—':((p>=0?'+':'')+p.toFixed(2)+'%')}</td>
+              <td>${x.exit_reason||'—'}</td></tr>`;}).join('')}
+          </tbody></table></div>`
+      : '';
+  }catch(e){ $('histList').textContent = '載入失敗：' + e; }
+}
+
+load(); loadSettings(); loadHistory();
+loadDbStatus();
+setInterval(loadDbStatus, 120000);
+setInterval(load, 60000); setInterval(loadHistory, 300000);
+</script>
+</body>
+</html>

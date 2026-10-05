@@ -1,6 +1,0 @@
-TyLove Trading
-版本：4.1（2026-10-04）
-
-V4  ：拆走 rapidocr／opencv，只用 tesseract + 2 倍放大
-V4.1：修 IntegrityError（單筆壞資料唔再令整張圖失敗）
-      修 journal.py 未定義 log

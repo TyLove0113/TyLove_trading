@@ -308,9 +308,19 @@ def evaluate(df: pd.DataFrame = None) -> dict:
     elif broke_dn and not prev_dn:
         direction = "short"
 
+    # ①-a 先計 H1 當日方向（方案 A：H1 優先）。
+    # 2026-10-06：實測發現 H1 同 15 分鐘趨勢相反時，兩個方向會互相封鎖
+    # → 整日完全靜音（嗰日 0 訊號就係咁）。用戶選擇「H1 優先」。
+    # 所以要先有偏見，先知 15m 趨勢過濾應唔應該生效。
+    _ok, _bias = _bias_ok(direction)
+    out["daily_bias"] = _bias
+    _bias_set = bool(_bias)
+
     # ① 趨勢過濾：跌勢唔做多、升勢唔做空。
     # 之前 trend_up / trend_dn 計完之後完全冇用過，只係塞入 reasons 當理由顯示，
     # 結果會出「下降趨勢 + 叫你做多」嘅自相矛盾訊號（2026-09-21 嗰單就係咁輸）。
+    # 2026-10-06 起：H1 有明確方向時以 H1 為準，15m 趨勢唔再擋；
+    #               只有 H1 未定先用 15m 趨勢做過濾。
     trend_conflict = bool(direction and (
         (direction == "long" and trend_dn) or (direction == "short" and trend_up)))
 
@@ -324,16 +334,19 @@ def evaluate(df: pd.DataFrame = None) -> dict:
 
     blocked = (_lim > 0 and out["today_trades"] >= _lim) or not out["session_ok"]
     if config.GOLD_TREND_FILTER and trend_conflict:
-        blocked = True
-        reasons.append(
-            "⚠️ 逆勢突破："
-            + ("EMA20 低於 EMA50（下降趨勢）" if direction == "long"
-               else "EMA20 高於 EMA50（上升趨勢）")
-            + "，趨勢過濾擋咗呢個" + ("做多" if direction == "long" else "做空"))
+        if _bias_set:
+            # 方案 A：H1 有方向 → 以 H1 為準，15m 趨勢只作提示，唔擋。
+            reasons.append(
+                "ℹ️ 15 分鐘趨勢同 H1 相反，但以 H1 當日方向為準（方案 A），照出訊號")
+        else:
+            blocked = True
+            reasons.append(
+                "⚠️ 逆勢突破："
+                + ("EMA20 低於 EMA50（下降趨勢）" if direction == "long"
+                   else "EMA20 高於 EMA50（上升趨勢）")
+                + "，趨勢過濾擋咗呢個" + ("做多" if direction == "long" else "做空"))
 
     # ── C. 每日方向偏見（2026-10-02 新增）──
-    _ok, _bias = _bias_ok(direction)
-    out["daily_bias"] = _bias
     if not _ok:
         blocked = True
         reasons.append(

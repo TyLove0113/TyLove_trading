@@ -183,6 +183,21 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------ 判斷
+def session_label(t: datetime) -> str:
+    """回傳時段名稱（香港時間）。
+
+    2026-10-06：用戶改用「全交易週監控」（GOLD_SESSION_MODE=all）之後，
+    亞洲時段嘅訊號流動性低、假突破多。加呢個標籤，
+    等佢之後可以分辨邊啲訊號嚟自活躍時段、邊啲嚟自淡靜時段。
+    """
+    h = t.hour
+    if h >= 15 or h < 1:
+        return "倫敦／紐約（活躍）"
+    if 1 <= h < 8:
+        return "亞洲早盤（偏靜）"
+    return "亞洲盤（最靜）"
+
+
 def _session_ok(t: datetime) -> bool:
     """倫敦 + 紐約活躍時段（香港時間 15:00 – 01:00）。
 
@@ -194,6 +209,9 @@ def _session_ok(t: datetime) -> bool:
             return False
         if t.weekday() == 5 and t.hour >= 5:    # 星期六 05:00 後收市
             return False
+    # 2026-10-06：新增 all 模式（整個交易週都監控，加快儲真實數據）。
+    if getattr(config, "GOLD_SESSION_MODE", "active") == "all":
+        return True
     return t.hour >= 15 or t.hour < 1
 
 
@@ -260,8 +278,12 @@ def evaluate(df: pd.DataFrame = None) -> dict:
         f"RSI(14) = {rsi:.1f}",
         f"前 20 支 K 線區間：{float(last['ll']) - _off:.2f} – {float(last['hh']) - _off:.2f}{_tag}",
     ]
-    if not out["session_ok"]:
-        reasons.append("⚠️ 而家唔係倫敦／紐約活躍時段，流動性差、點差會擴闊")
+    # 2026-10-06：無論邊個模式都顯示時段名。
+    # 用戶改用 all 模式（全交易週監控）之後，亞洲時段訊號流動性低，
+    # 有時段標籤佢之後先可以分辨邊啲數據可用。
+    reasons.append("時段：%s" % session_label(datetime.now(ZoneInfo(config.HK_TZ))))
+    if session_label(datetime.now(ZoneInfo(config.HK_TZ))) != "倫敦／紐約（活躍）":
+        reasons.append("⚠️ 唔係活躍時段，流動性較差、點差可能擴闊")
     _lim = config.GOLD_MAX_TRADES_PER_DAY          # 0 = 不限
     if _lim > 0 and out["today_trades"] >= _lim:
         reasons.append(f"⚠️ 今日已有 {out['today_trades']} 筆訊號（上限 {_lim} 筆），唔再出")

@@ -255,7 +255,8 @@ def scheduler_loop():
             # ⚠️ 唔可以綁港股時間 —— 港股掃描時段（09:25/10:30/11:30/14:00/15:50）
             # 大部分都唔喺黃金活躍時段，會被 _session_ok 過濾晒，一日最多得一次機會。
             if config.GOLD_ENABLED and config.GOLD_CHECK_MIN > 0:
-                if t.hour >= 15 or t.hour < 1:
+                # 同 gold._session_ok 用同一個判斷 —— 避免兩處邏輯唔一致
+                if gold._session_ok(t):
                     if time.time() - last_gold >= config.GOLD_CHECK_MIN * 60:
                         last_gold = time.time()
                         threading.Thread(target=job_gold_scan, daemon=True).start()

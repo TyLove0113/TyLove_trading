@@ -123,6 +123,12 @@ GOLD_CHECK_MIN = int(os.getenv("GOLD_CHECK_MIN", "1"))
 # 即時預警：價格一穿區間就即刻推，唔等 K 線收盤（快約 15 分鐘）。
 GOLD_EARLY_ALERT = int(os.getenv("GOLD_EARLY_ALERT", "1"))
 
+# 2026-10-06：監控時段模式。
+#   active = 只喺倫敦＋紐約活躍時段（香港 15:00–01:00）監控
+#   all    = 整個交易週都監控（只排除週末休市）
+# 用戶想快啲儲真實數據 → 可以設 all，之後儲夠再切返 active。
+GOLD_SESSION_MODE = os.getenv("GOLD_SESSION_MODE", "active").strip().lower()
+
 # ⚠️ 基準校正（好重要）
 # 程式用 COMEX 期貨 GC=F，但你 MT4 係現貨 XAUUSD —— 兩者差約 US$20–35，
 # 而且差距會隨時間漂移。填「期貨價 − 你 MT4 現價」嘅差額（正數），

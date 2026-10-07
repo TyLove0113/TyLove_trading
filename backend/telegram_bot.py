@@ -266,6 +266,44 @@ def _handle(token: str, my_chat, u: dict) -> None:
               "🧹 清走咗 %d 張持倉記錄。\n\n"
               "（唔係平倉，只係唔再監控。想再監控就再傳「交易」分頁截圖。）" % n)
         return
+    if text.startswith("/close"):
+        # 2026-10-07：用戶反映 Telegram 完全冇方法記錄平倉，只可以上網頁。
+        #   /close              → 列出持倉叫你揀
+        #   /close 2            → 平倉 #2（數值之後可以上網頁補）
+        #   /close 2 4148.03 -27.70  → 平倉 + 平倉價 + 盈虧
+        import gold_positions as gp
+        import journal as J
+        parts = text.split()
+        if len(parts) < 2 or not parts[1].lstrip("#").isdigit():
+            op = gp.all_open()
+            if not op:
+                _send(token, my_chat, "\U0001f4ed \u800c\u5bb6\u5187\u672a\u5e73\u5009\u6301\u5009\u3002")
+            else:
+                L = ["\U0001f534 *\u63c0\u908a\u5f35\u5e73\u5009\uff1f*\u3000\u6253 `/close \u7de8\u865f`\n"]
+                for q in op:
+                    L.append("#%s %s %s\u624b\u3000\u5165 %s\u3000\u6b62 %s" % (
+                        q["id"],
+                        "\U0001f7e2\u505a\u591a" if q.get("direction") == "long" else "\U0001f534\u505a\u7a7a",
+                        q.get("lot"), q.get("entry"), q.get("stop")))
+                L.append("\n\u60f3\u9806\u4fbf\u8a18\u6578\u503c\uff1a`/close \u7de8\u865f \u5e73\u5009\u50f9 \u76c8\u8667`")
+                _send(token, my_chat, "\n".join(L))
+            return
+        pid = int(parts[1].lstrip("#"))
+        with gp._conn() as c:
+            row = c.execute("SELECT ticket FROM gold_positions WHERE id=?", (pid,)).fetchone()
+        if not row:
+            _send(token, my_chat, "\u274c \u6435\u5514\u5230 #%d\u3002" % pid)
+            return
+        ex = float(parts[2]) if len(parts) > 2 else None
+        pnl = float(parts[3]) if len(parts) > 3 else None
+        gp.close_by_ticket(row["ticket"] or str(pid), ex, pnl)
+        out = "\u2705 #%d \u5df2\u7d93\u5e73\u5009\u3002\n\n\U0001f4d2 \u4ea4\u6613\u65e5\u8a8c\u800c\u5bb6\u6709 *%d* \u7b46\u6b63\u5f0f\u8a18\u9304\u3002" % (
+            pid, J.stats().get("n_closed", 0))
+        if ex is None:
+            out += "\n\n\u26a0\ufe0f \u5187\u5e73\u5009\u50f9\u540c\u76c8\u8667\uff0c\u672a\u8a08\u5165\u76c8\u8667\u7d71\u8a08\u3002\n\u60f3\u88dc\u8fd4\u5c31\u4e0a\u7db2\u9801 /gold \u6539\u3002"
+        _send(token, my_chat, out)
+        return
+
     if text.startswith("/help") or text.startswith("/start"):
         _send(token, my_chat,
               "📸 *點用*\n"
@@ -275,6 +313,9 @@ def _handle(token: str, my_chat, u: dict) -> None:
               "3. 傳完我即刻覆你，你撳「✅ 確認入帳」\n\n"
               "/status 睇記錄同盈虧\n"
               "/pos 睇未平倉持倉\n"
+              "/close 平倉（可以喺呢度直接做）\n"
+              "　 /close 2　　　　　　　→ 平倉 #2\n"
+              "　 /close 2 4148.03 -27.70　→ 連平倉價、盈虧一齊記\n"
               "（想改數值就上網頁 /gold 改完先確認）")
         return
 

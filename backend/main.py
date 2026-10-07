@@ -550,11 +550,18 @@ def gold_journal():
 @app.route("/api/gold/journal/<int:tid>", methods=["POST", "DELETE"])
 def gold_journal_one(tid):
     import journal
-    if request.method == "DELETE":
-        return jsonify({"ok": journal.delete_trade(tid)})
-    d = request.get_json(silent=True) or {}
-    return jsonify({"ok": journal.update_trade(tid, d),
-                    "trades": journal.list_trades(), "stats": journal.stats()})
+    # 2026-10-07：以前冇 try/except。一有例外就回 Flask 嘅 HTML 錯誤頁，
+    # 前端 fetch(...).json() 就會爆，用戶只見到「儲存中…」卡死，
+    # 完全唔知發生咩事。而家一律回 JSON，前端先顯示得到錯誤。
+    try:
+        if request.method == "DELETE":
+            return jsonify({"ok": journal.delete_trade(tid)})
+        d = request.get_json(silent=True) or {}
+        return jsonify({"ok": journal.update_trade(tid, d),
+                        "trades": journal.list_trades(), "stats": journal.stats()})
+    except Exception as exc:  # noqa: BLE001
+        app.logger.exception("更新第 %s 筆記錄失敗", tid)
+        return jsonify({"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}), 200
 
 
 @app.route("/api/gold/journal/<int:tid>/close", methods=["POST"])

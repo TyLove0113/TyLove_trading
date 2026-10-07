@@ -145,10 +145,18 @@ def update_trade(tid: int, d: dict) -> bool:
     """改一筆記錄（未平倉都可以改止蝕／備註）。"""
     fields, vals = [], []
     for k in ("actual_entry", "actual_stop", "signal_entry", "signal_stop",
-              "signal_target", "lot", "spread_at_entry", "opened_at"):
+              "signal_target", "lot", "spread_at_entry"):
         if k in d:
             fields.append(f"{k}=?")
             vals.append(_f(d[k]))
+    # 2026-10-07 修：opened_at 係時間字串（前端 datetime-local 傳 ISO 格式），
+    # 以前同價格欄位一齊經 _f() 解析 → float() 失敗 → 變 None → 開倉時間被清走。
+    # 用戶按一次「更新記錄」就會蝕咗個開倉時間。
+    if "opened_at" in d:
+        v = d["opened_at"]
+        if v not in (None, ""):
+            fields.append("opened_at=?")
+            vals.append(str(v).replace("T", " ").strip()[:19])
     if "followed" in d and d["followed"] in FOLLOW_OPTIONS:
         fields.append("followed=?")
         vals.append(d["followed"])

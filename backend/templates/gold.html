@@ -678,13 +678,34 @@ async function saveJournal() {
   };
   body.data_source = $('jDataSource').value || null;
   const url = jEditId ? ('/api/gold/journal/' + jEditId) : '/api/gold/journal';
-  const d = await (await fetch(url, {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)})).json();
-  if (!d.ok) { $('jMsg').textContent = '❌ ' + (d.error || '儲存失敗'); return; }
+  // 2026-10-07 修：以前冇 try/catch，一有錯（伺服器 500、斷線、回應唔係 JSON）
+  // 就會一直卡住喺「儲存中…」，用戶完全唔知發生咩事。
   const wasEdit = !!jEditId;
+  let d = null;
+  try {
+    const ctl = new AbortController();
+    const tmo = setTimeout(() => ctl.abort(), 20000);   // 20 秒上限
+    const r = await fetch(url, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body), signal: ctl.signal});
+    clearTimeout(tmo);
+    const txt = await r.text();
+    try { d = JSON.parse(txt); }
+    catch (e) {
+      $('jMsg').textContent = '❌ 伺服器回應怪怪的（HTTP ' + r.status + '）：'
+        + txt.slice(0, 120);
+      return;
+    }
+  } catch (e) {
+    $('jMsg').textContent = (e.name === 'AbortError')
+      ? '❌ 等咗 20 秒都冇回應。請再試一次，或者重新載入網頁。'
+      : '❌ 傳送失敗：' + e.message;
+    return;
+  }
+  if (!d || !d.ok) { $('jMsg').textContent = '❌ ' + ((d && d.error) || '儲存失敗'); return; }
   resetForm();
-  await loadJournal();
+  try { await loadJournal(); }
+  catch (e) { $('jMsg').textContent = '⚠️ 已儲存，但重載清單失敗，請手動重新載入'; return; }
   $('jMsg').textContent = wasEdit ? '✅ 已更新記錄' : '✅ 已儲存記錄';
 }
 

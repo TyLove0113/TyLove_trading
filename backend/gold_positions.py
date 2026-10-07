@@ -128,6 +128,8 @@ def close_by_ticket(ticket, exit_price=None, pnl_usd=None) -> bool:
                             ("%" + tk + "%",)).fetchone()
         if not row:
             return False
+        full = c.execute("SELECT * FROM gold_positions WHERE id=?",
+                         (row["id"],)).fetchone()
         parts = []
         if exit_price is not None:
             parts.append("出 %s" % exit_price)
@@ -136,6 +138,36 @@ def close_by_ticket(ticket, exit_price=None, pnl_usd=None) -> bool:
         note = "已平倉" + ("（" + "／".join(parts) + "）" if parts else "")
         c.execute("UPDATE gold_positions SET status='closed', last_alert=?, "
                   "updated_at=? WHERE id=?", (note, _now(), row["id"]))
+
+    # ② 補入交易日誌（2026-10-07）。
+    # 用戶反映：按住「已經平倉」之後，嗰筆交易喺統計上完全消失 ——
+    # 唔計勝率、唔計盈虧、唔入交易日誌。持倉同交易日誌係兩張表，
+    # 收尾持倉唔會自動入帳，所以呢度要補。
+    # 但如果筆交易之前已經由 OCR 入過日誌，就唔可以再入一次（會重複計）。
+    try:
+        import journal as J
+        if not J.deal_exists(tk):
+            f = dict(full) if full else {}
+            jid = J.add_trade({
+                "opened_at": f.get("opened_at") or _now(),
+                "closed_at": _now(),
+                "direction": f.get("direction"),
+                "actual_entry": f.get("entry"),
+                "actual_stop": f.get("stop"),
+                "signal_target": f.get("target"),
+                "lot": f.get("lot"),
+                "exit_price": exit_price,
+                "pnl_usd": pnl_usd,
+                "status": "closed",
+                "data_source": "mt4",
+                "ticket": tk,
+                "followed": "yes",
+                "note": "由未平倉持倉收尾時自動補入（" + note + "）",
+            })
+            J.mark_deal_journal(tk, jid)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception("補入交易日誌失敗（持倉已收尾）")
     return True
 
 

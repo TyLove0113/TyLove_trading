@@ -498,8 +498,21 @@ def api_gold_positions_close(pid: int):
     """
     try:
         import gold_positions as gp
-        gp.close(pid)
-        return jsonify({"ok": True, "positions": gp.all_open()})
+        # 2026-10-07：改為走 close_by_ticket —— 除咗收尾持倉，
+        # 仲會補一筆入交易日誌。否則用戶撳完「已經平倉」之後，
+        # 嗰筆交易喺統計上完全消失（唔計勝率、唔計盈虧）。
+        body = request.get_json(silent=True) or {}
+        with gp._conn() as c:  # noqa: SLF001
+            row = c.execute("SELECT ticket FROM gold_positions WHERE id=?",
+                            (pid,)).fetchone()
+        if not row:
+            return jsonify({"ok": False, "error": "搵唔到呢筆持倉"}), 404
+        tk = row["ticket"] or str(pid)
+        out = float(body["exit_price"]) if body.get("exit_price") not in (None, "") else None
+        pnl = float(body["pnl_usd"]) if body.get("pnl_usd") not in (None, "") else None
+        gp.close_by_ticket(tk, out, pnl)
+        return jsonify({"ok": True, "positions": gp.all_open(),
+                        "journal_added": out is not None or pnl is not None})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)})
 

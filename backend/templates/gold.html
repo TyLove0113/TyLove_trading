@@ -311,11 +311,22 @@ async function loadPositions(){
 }
 
 async function posClose(pid){
-  if (!confirm('確認呢筆已經喺 MT4 平倉？\n（紀錄會由「未平倉」移走）')) return;
+  // 2026-10-07：順便收集平倉價同盈虧 —— 咁收尾之後會自動補一筆入交易日誌。
+  // 之前撳完「已經平倉」，嗰筆交易喺統計上完全消失（唔計勝率、唔計盈虧）。
+  const ex = prompt('喺 MT4 嘅平倉價（留空都可以）：', '');
+  if (ex === null) return;
+  const pn = prompt('盈虧美元，例如 -27.70（留空都可以）：', '');
+  if (pn === null) return;
+  if (!confirm('確認呢筆已經喺 MT4 平倉？\n'
+      + (ex ? '平倉價：' + ex + '\n' : '')
+      + (pn ? '盈虧：' + pn + '\n' : '')
+      + '\n填咗嘅話，會自動補一筆入交易日誌。')) return;
   const d = await (await fetch(`/api/gold/positions/${pid}/close`,
-                               {method:'POST'})).json();
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify({exit_price: ex, pnl_usd: pn})})).json();
   if (!d.ok) { alert('失敗：' + (d.error || '')); return; }
-  jPositions();
+  loadPositions();
+  loadJournal();
 }
 
 async function posDel(pid){
@@ -323,7 +334,7 @@ async function posDel(pid){
   const d = await (await fetch(`/api/gold/positions/${pid}`,
                                {method:'DELETE'})).json();
   if (!d.ok) { alert('失敗：' + (d.error || '')); return; }
-  jPositions();
+  loadPositions();
 }
 
 async function jOcrStatus(){
@@ -331,19 +342,21 @@ async function jOcrStatus(){
     const d = await (await fetch('/api/gold/ocr-status')).json();
     const st = $('ocrStat'), er = $('ocrErr');
     if (d.available) {
-      const _main = (d.engine === 'rapidocr');
-      st.textContent = '✅ OCR 已啟用（' + d.engine + '）'
-        + (_main ? '' : '　⚠️ 主引擎 rapidocr 未載入，讀圖準確度會明顯較低');
-      st.style.color = _main ? '#4ade80' : '#fbbf24';
-      if (_main) { er.classList.add('hidden'); }
-      else {
+      // 2026-10-07：V4 已經整個拆走 rapidocr（佢嘅 GUI opencv 依賴
+      // 喺 Railway slim 容器永遠裝唔到），tesseract 就係唯一引擎。
+      // 但呢段警告仍然寫「主引擎 rapidocr 未載入、準確度會明顯較低」，
+      // 令用戶以為 OCR 壞咗 —— 完全誤導。改為正常顯示。
+      st.textContent = '✅ OCR 已啟用（' + d.engine + '）';
+      st.style.color = '#4ade80';
+      er.classList.add('hidden');
+      if (false) {
         const rows = Object.entries(d.errors || {})
           .map(([k,v]) => '<div><b>' + k + '</b>：' + v + '</div>').join('');
         const sl = Object.entries(d.syslib || {})
           .map(([k, v]) => k + ' ' + (v ? '✅' : '❌')).join('　');
         er.innerHTML = '<b>⚠️ 主引擎 rapidocr 未載入（截圖俾我睇呢段）</b>'
           + '<div>系統庫：' + (sl || '（無資料）') + '</div>'
-          + '<div>rapidocr ' + (d.rapidocr_import ? '✅' : '❌')
+          + '<div>rapidocr（已停用）'
           + '／pytesseract ' + (d.tesseract_import ? '✅' : '❌')
           + '／tesseract 執行檔 ' + (d.tesseract_binary ? '✅' : '❌') + '</div>'
           + rows;
@@ -356,7 +369,7 @@ async function jOcrStatus(){
         .map(([k,v]) => '<div><b>' + k + '</b>：' + v + '</div>').join('');
       er.innerHTML = '<b>診斷資料（截圖俾我睇）</b>'
         + '<div>Pillow ' + (d.pillow ? '✅' : '❌')
-        + '／rapidocr ' + (d.rapidocr_import ? '✅' : '❌')
+
         + '／pytesseract ' + (d.tesseract_import ? '✅' : '❌')
         + '／tesseract 執行檔 ' + (d.tesseract_binary ? '✅' : '❌') + '</div>'
         + rows + '<div style="margin-top:6px">' + (d.hint || '') + '</div>';

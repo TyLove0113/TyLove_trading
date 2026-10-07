@@ -488,6 +488,34 @@ def api_gold_positions_clear():
         return jsonify({"ok": False, "error": str(exc)})
 
 
+@app.route("/api/gold/positions/<int:pid>/close", methods=["POST"])
+def api_gold_positions_close(pid: int):
+    """逐筆平倉。
+
+    2026-10-07 新增。用戶反映「未平倉持倉」只有文字、冇任何按鈕，
+    紀錄一旦入咗就永遠顯示未平倉 —— 明明 MT4 已經平咗。
+    gold_positions.close() 一早存在，但一直冇路由呼叫佢。
+    """
+    try:
+        import gold_positions as gp
+        gp.close(pid)
+        return jsonify({"ok": True, "positions": gp.all_open()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)})
+
+
+@app.route("/api/gold/positions/<int:pid>", methods=["DELETE"])
+def api_gold_positions_delete(pid: int):
+    """完全刪走一筆持倉紀錄（唔想留低時用）。2026-10-07 新增。"""
+    try:
+        import gold_positions as gp
+        with gp._conn() as c:  # noqa: SLF001
+            c.execute("DELETE FROM gold_positions WHERE id=?", (pid,))
+        return jsonify({"ok": True, "positions": gp.all_open()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)})
+
+
 @app.route("/api/gold/journal", methods=["GET", "POST"])
 def gold_journal():
     """黃金交易日誌 —— 記錄執行偏差、點差、跟足程度。"""
@@ -651,7 +679,20 @@ def gold_ocr():
 
         created, skipped = [], []
         created_info = []
+        auto_closed = []
         for t in trades:
+            # 2026-10-07：由「歷史」讀到已平倉交易 → 自動收尾對應持倉。
+            # 用戶反映 MT4 平咗倉之後，持倉一世顯示「未平倉」。
+            # 就算呢筆之前已經匯入過（會被跳過），都一樣要收尾，
+            # 所以呢段要放喺 deal_exists 檢查之前。
+            if t.get("ticket") and t.get("exit_price"):
+                try:
+                    import gold_positions as gp
+                    if gp.close_by_ticket(t.get("ticket"),
+                                          t.get("exit_price"), t.get("profit")):
+                        auto_closed.append(t.get("ticket"))
+                except Exception:  # noqa: BLE001
+                    app.logger.exception("自動平倉失敗（唔阻主流程）")
             d = {
                 "direction": t.get("direction"),
                 "actual_entry": t.get("actual_entry"),
@@ -699,11 +740,14 @@ def gold_ocr():
                 skipped.append(t.get("ticket"))
         return jsonify({
             "ok": True, "created": created, "skipped": skipped,
+            "auto_closed": auto_closed,
             "read": len(trades), "created_info": created_info,
             "count": len(trades),
             "notes": (["%d 張草稿已開好，請逐張核對後確認入帳。" % len(created)]
                       if created else
-                      ["呢 %d 筆之前已經匯入過，全部跳過。" % len(skipped)]),
+                      ["呢 %d 筆之前已經匯入過，全部跳過。" % len(skipped)])
+                     + (["📌 %d 張持倉已自動標記平倉。" % len(auto_closed)]
+                        if auto_closed else []),
         }), 200
 
     except Exception as e:  # noqa: BLE001

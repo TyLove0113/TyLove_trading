@@ -108,6 +108,37 @@ def close(pid: int) -> None:
                   "WHERE id=?", (_now(), pid))
 
 
+def close_by_ticket(ticket, exit_price=None, pnl_usd=None) -> bool:
+    """由 ticket 自動平倉。
+
+    2026-10-07 新增。用戶反映：MT4 明明已經平咗倉，但系統一世顯示
+    「未平倉」，而且網頁／Telegram 都冇任何方法收尾。
+    呢個函數喺日誌 OCR 讀到「歷史」分頁嘅已平倉交易時自動配對呼叫。
+    """
+    if not ticket:
+        return False
+    init_db()
+    tk = str(ticket).strip()
+    with _conn() as c:
+        row = c.execute("SELECT id FROM gold_positions "
+                        "WHERE ticket=? AND status='open'", (tk,)).fetchone()
+        if not row and tk.isdigit():
+            row = c.execute("SELECT id FROM gold_positions "
+                            "WHERE ticket LIKE ? AND status='open'",
+                            ("%" + tk + "%",)).fetchone()
+        if not row:
+            return False
+        parts = []
+        if exit_price is not None:
+            parts.append("出 %s" % exit_price)
+        if pnl_usd is not None:
+            parts.append("盈虧 %s" % pnl_usd)
+        note = "已平倉" + ("（" + "／".join(parts) + "）" if parts else "")
+        c.execute("UPDATE gold_positions SET status='closed', last_alert=?, "
+                  "updated_at=? WHERE id=?", (note, _now(), row["id"]))
+    return True
+
+
 def clear() -> int:
     """清走全部未平倉（例如你已經全部平晒倉）。"""
     with _conn() as c:

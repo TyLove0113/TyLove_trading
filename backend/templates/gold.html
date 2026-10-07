@@ -296,8 +296,34 @@ async function loadPositions(){
         + (p.direction === 'long' ? '🟢做多' : '🔴做空') + '　' + p.lot + '手'
         + '<br><span class="muted">入 ' + p.entry + '　止 ' + (p.stop || '—')
         + '　標 ' + (p.target || '—') + '　香港 ' + (p.opened_at || '—') + '</span>'
+        // 2026-10-07：加平倉／刪除按鈕。之前呢一區完全冇按鈕，
+        // MT4 平咗倉之後系統仍然一世顯示「未平倉」，冇任何方法收尾。
+        + '<div style="margin-top:6px;display:flex;gap:6px">'
+        + '<button onclick="posClose(' + p.id + ')" '
+        + 'style="padding:2px 10px;border-radius:4px;background:#0369a1;color:#fff;font-size:12px">'
+        + '✅ 已經平倉</button>'
+        + '<button onclick="posDel(' + p.id + ')" '
+        + 'style="padding:2px 10px;border-radius:4px;background:#7f1d1d;color:#fff;font-size:12px">'
+        + '🗑 刪除紀錄</button>'
+        + '</div>'
         + '</div>').join('');
   } catch (e) { /* 靜靜咁失敗，唔阻主流程 */ }
+}
+
+async function posClose(pid){
+  if (!confirm('確認呢筆已經喺 MT4 平倉？\n（紀錄會由「未平倉」移走）')) return;
+  const d = await (await fetch(`/api/gold/positions/${pid}/close`,
+                               {method:'POST'})).json();
+  if (!d.ok) { alert('失敗：' + (d.error || '')); return; }
+  jPositions();
+}
+
+async function posDel(pid){
+  if (!confirm('確定完全刪走呢筆持倉紀錄？')) return;
+  const d = await (await fetch(`/api/gold/positions/${pid}`,
+                               {method:'DELETE'})).json();
+  if (!d.ok) { alert('失敗：' + (d.error || '')); return; }
+  jPositions();
 }
 
 async function jOcrStatus(){

@@ -248,16 +248,19 @@ def list_trades(limit: int = 200, include_draft: bool = False) -> list[dict]:
     未經用戶確認嘅，唔應該混入正式記錄（會污染統計同你嘅判斷）。
     草稿另外用 drafts() 取。
     """
+    # 2026-10-08：改為按【交易時間】排序（舊 → 新，由上至下）。
+    # 之前用 id DESC（建立次序），所以你遲啲補記舊交易時，
+    # 記錄會插喺中間，睇落好似亂咗 —— 用戶反映過。
+    # 冇填開倉時間嘅排最後，唔阻你睇有時間嘅記錄。
+    _ord = ("ORDER BY (opened_at IS NULL OR opened_at=''), "
+            "opened_at ASC, id ASC LIMIT ?")
     with _conn() as c:
         if include_draft:
-            rows = c.execute(
-                "SELECT * FROM gold_trades ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+            rows = c.execute("SELECT * FROM gold_trades " + _ord, (limit,)).fetchall()
         else:
             rows = c.execute(
-                "SELECT * FROM gold_trades WHERE status<>'draft' "
-                "ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+                "SELECT * FROM gold_trades WHERE status<>'draft' " + _ord,
+                (limit,)).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -380,7 +383,8 @@ def drafts() -> list:
         init_db()
         with _conn() as c:
             rs = c.execute("SELECT * FROM gold_trades WHERE status='draft' "
-                           "ORDER BY id DESC").fetchall()
+                           "ORDER BY (opened_at IS NULL OR opened_at=''), "
+                           "opened_at ASC, id ASC").fetchall()
         return [dict(r) for r in rs]
     except sqlite3.Error:
         log.exception("讀取草稿失敗")

@@ -122,7 +122,12 @@
     <summary id="jFormTitle" class="cursor-pointer text-sm text-sky-400 select-none">➕ 記錄一筆新交易</summary>
     <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 text-xs">
       <label class="block">開倉時間
-        <input id="jOpenedAt" type="datetime-local" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="jOpenedAt" type="datetime-local" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+          <button type="button" onclick="$('jOpenedAt').value=jLocalNow()"
+            title="一時之間唔記得幾點，可以撳呢個用而家時間"
+            style="margin-top:4px;padding:6px 10px;border-radius:6px;background:#334155;color:#e2e8f0;font-size:12px;white-space:nowrap">🕐 而家</button>
+        </div>
       </label>
       <label class="block">方向
         <select id="jDirection" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
@@ -669,6 +674,10 @@ function resetForm() {
   ['jActualEntry','jActualStop','jSpread','jNote','jSignalEntry',
    'jSignalStop','jSignalTarget','jLot','jExitPrice','jPnl']
     .forEach(id => { $(id).value = ''; });
+  // 2026-10-08：之前漏咗重設開倉時間，所以編輯舊記錄之後撳取消，
+  // 個時間會殘留住嗰筆舊交易嘅時間，跟住新增就會靜靜雞用錯時間。
+  $('jOpenedAt').value = jLocalNow();
+  $('jDirection').value = 'long';
   $('jSaveBtn').textContent = '儲存記錄';
   $('jCancelBtn').classList.add('hidden');
   $('jFormTitle').textContent = '➕ 記錄一筆新交易';

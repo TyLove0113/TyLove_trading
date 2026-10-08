@@ -174,9 +174,14 @@ def job_position_watch():
     if not gold._session_ok(now):
         return {"checked": 0, "reason": "唔喺黃金時段"}
     # 用同一個數據源攞現價
+    # 2026-10-07 修（嚴重）：持倉監控之前直接用 yfinance 期貨價（GC=F）
+    # 去同【現貨】入場價比較，冇做校正。結果期貨價高咗約 28 美元，
+    # 系統會誤報「就快到止蝕位」—— 用戶明明賺緊錢（實測現貨 4071.97、
+    # 入場 4083.4 做空 = 賺 11.4 美元，系統卻報現價 4104.2）。
+    # 訊號嗰邊一直有做校正，呢度補返用同一個函數。
     try:
         df = gold.add_indicators(gold.fetch())
-        price = float(df.iloc[-1]["Close"])
+        price = float(df.iloc[-1]["Close"]) - gold.effective_offset()
         atr = float(df.iloc[-1]["atr"]) if "atr" in df.columns else 0.0
     except Exception:  # noqa: BLE001
         log.exception("持倉監控攞價失敗")
@@ -517,6 +522,18 @@ def api_gold_positions_close(pid: int):
         return jsonify({"ok": False, "error": str(exc)})
 
 
+@app.route("/api/gold/positions/<int:pid>", methods=["POST"])
+def api_gold_positions_update(pid):
+    """手動更正持倉數值（2026-10-07 新增）。用戶反映 OCR 有時讀歪。"""
+    try:
+        import gold_positions as gp
+        d = request.get_json(silent=True) or {}
+        ok = gp.update(pid, d)
+        return jsonify({"ok": ok, "positions": gp.all_open()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)})
+
+
 @app.route("/api/gold/positions/<int:pid>", methods=["DELETE"])
 def api_gold_positions_delete(pid: int):
     """完全刪走一筆持倉紀錄（唔想留低時用）。2026-10-07 新增。"""
@@ -791,6 +808,43 @@ def gold_shot(name):
     if not os.path.exists(full):
         return jsonify({"ok": False, "error": "冇呢張圖"}), 404
     return send_from_directory(d, os.path.basename(full))
+
+
+@app.route("/api/gold/notes", methods=["GET", "POST"])
+def gold_notes():
+    """黃金交易日記 —— 文字筆記 + 截圖（2026-10-07 新增）。
+
+    用戶要求可以輸入文字日記同記錄自己做嘅 screenshot。
+    可以收 JSON（純文字）或者 multipart（連圖）。
+    """
+    import gold_notes as N
+    if request.method == "GET":
+        return jsonify({"ok": True, "notes": N.all_notes()})
+    try:
+        img = ""
+        up = request.files.get("image")
+        if up and up.filename:
+            from datetime import datetime as _dt
+            name = _dt.now().strftime("%Y%m%d-%H%M%S") + "-note.jpg"
+            os.makedirs(_shot_dir(), exist_ok=True)
+            up.save(os.path.join(_shot_dir(), name))
+            img = name
+        d = request.form if request.form else (request.get_json(silent=True) or {})
+        if not (d.get("body") or "").strip() and not img:
+            return jsonify({"ok": False, "error": "冇內容"})
+        nid = N.add(d.get("body") or "", img, d.get("trade_date"), "web")
+        return jsonify({"ok": True, "id": nid, "notes": N.all_notes()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)})
+
+
+@app.route("/api/gold/notes/<int:nid>", methods=["DELETE"])
+def gold_notes_del(nid):
+    import gold_notes as N
+    try:
+        return jsonify({"ok": N.delete(nid), "notes": N.all_notes()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)})
 
 
 @app.route("/api/gold/ocr-status", methods=["GET"])

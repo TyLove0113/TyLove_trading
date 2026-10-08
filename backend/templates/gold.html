@@ -302,6 +302,12 @@ async function loadPositions(){
         + '<button onclick="posClose(' + p.id + ')" '
         + 'style="padding:2px 10px;border-radius:4px;background:#0369a1;color:#fff;font-size:12px">'
         + '✅ 已經平倉</button>'
+        + '<button onclick="posEdit(' + p.id + ',' + JSON.stringify(String(p.entry)) + ','
+        + JSON.stringify(String(p.stop === null || p.stop === undefined ? '' : p.stop)) + ','
+        + JSON.stringify(String(p.target === null || p.target === undefined ? '' : p.target)) + ','
+        + JSON.stringify(String(p.lot === null || p.lot === undefined ? '' : p.lot)) + ')" '
+        + 'style="padding:2px 10px;border-radius:4px;background:#a16207;color:#fff;font-size:12px">'
+        + '✏️ 改數值</button>'
         + '<button onclick="posDel(' + p.id + ')" '
         + 'style="padding:2px 10px;border-radius:4px;background:#7f1d1d;color:#fff;font-size:12px">'
         + '🗑 刪除紀錄</button>'
@@ -327,6 +333,27 @@ async function posClose(pid){
   if (!d.ok) { alert('失敗：' + (d.error || '')); return; }
   loadPositions();
   loadJournal();
+}
+
+async function posEdit(pid, entry, stop, target, lot){
+  // 2026-10-07：用戶反映 OCR 有時讀歪入場／止蝕／目標，要可以手動改。
+  const v = prompt(
+    '一次過填（用空格分隔）：\n入場價  止蝕  目標  手數\n\n'
+    + '留空 = 唔改該項；例：4112.59 4118.3 4095.49 0.05',
+    [entry, stop, target, lot].join(' ').trim());
+  if (v === null) return;
+  const a = v.trim().split(/\s+/);
+  const body = {};
+  if (a[0]) body.entry = a[0];
+  if (a[1]) body.stop = a[1];
+  if (a[2]) body.target = a[2];
+  if (a[3]) body.lot = a[3];
+  if (!Object.keys(body).length) { alert('冇改到嘢。'); return; }
+  const d = await (await fetch(`/api/gold/positions/${pid}`,
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify(body)})).json();
+  if (!d.ok) { alert('失敗：' + (d.error || '')); return; }
+  loadPositions();
 }
 
 async function posDel(pid){
@@ -958,5 +985,77 @@ async function pushGSettings(payload, okMsg){
 }
 </script>
 <div id="posBox" class="card"></div>
+
+<!-- 交易日記：文字筆記 + 截圖（2026-10-07 新增） -->
+<div class="card" style="margin-top:12px">
+  <div class="text-sm font-semibold" style="margin-bottom:8px">📝 交易日記（文字 ＋ 截圖）</div>
+  <div class="muted" style="margin-bottom:8px">
+    寫低你今日嘅觀察、檢討、mood。可以連 MT4 截圖一齊記低。
+  </div>
+  <textarea id="noteBody" rows="4" placeholder="例如：今日 H1 方向正確，但頭兩筆被假突破掃走止蝕……"
+    style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:8px"></textarea>
+  <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <input type="file" id="noteImg" accept="image/*" class="muted" style="font-size:12px">
+    <button onclick="noteSave()"
+      style="padding:6px 16px;border-radius:6px;background:#047857;color:#fff;font-size:13px">
+      💾 儲存日記</button>
+    <span id="noteMsg" class="muted" style="font-size:12px"></span>
+  </div>
+  <div id="noteList" style="margin-top:12px"></div>
+</div>
+<script>
+async function noteSave(){
+  const body = $('noteBody').value.trim();
+  const f = $('noteImg').files[0];
+  if (!body && !f) { $('noteMsg').textContent = '❌ 冇內容'; return; }
+  $('noteMsg').textContent = '儲存中…';
+  try {
+    const fd = new FormData();
+    fd.append('body', body);
+    if (f) fd.append('image', f);
+    const r = await fetch('/api/gold/notes', {method:'POST', body: fd,
+      signal: AbortSignal.timeout(30000)});
+    const d = await r.json();
+    if (!d.ok) { $('noteMsg').textContent = '❌ ' + (d.error || '失敗'); return; }
+    $('noteBody').value = ''; $('noteImg').value = '';
+    $('noteMsg').textContent = '✅ 已儲存';
+    noteList(d.notes);
+  } catch (e) {
+    $('noteMsg').textContent = '❌ 儲存失敗：' + e.name;
+  }
+}
+
+function noteList(ns){
+  const box = $('noteList');
+  if (!ns) return;
+  if (!ns.length) { box.innerHTML = '<div class="muted">仲未有日記。</div>'; return; }
+  box.innerHTML = ns.map(n => {
+    const img = n.image_path
+      ? `<div style="margin-top:6px"><img src="/api/gold/shot/${encodeURIComponent(n.image_path)}"
+           style="max-width:100%;border-radius:6px;border:1px solid #334155"></div>` : '';
+    const b = (n.body || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+              .replace(/\n/g,'<br>');
+    return `<div style="padding:8px 0;border-top:1px solid #ffffff14">
+      <div class="muted" style="font-size:12px">${n.created_at}　·　${n.source || ''}
+        <button onclick="noteDel(${n.id})"
+          style="margin-left:8px;padding:1px 8px;border-radius:4px;background:#7f1d1d;color:#fff;font-size:11px">🗑</button>
+      </div>
+      <div style="margin-top:4px">${b}</div>${img}</div>`;
+  }).join('');
+}
+
+async function noteDel(id){
+  if (!confirm('刪走呢篇日記？')) return;
+  const d = await (await fetch('/api/gold/notes/' + id, {method:'DELETE'})).json();
+  if (d.ok) noteList(d.notes);
+}
+
+(async () => {
+  try {
+    const d = await (await fetch('/api/gold/notes')).json();
+    noteList(d.notes);
+  } catch (e) { /* 唔阻主流程 */ }
+})();
+</script>
 </body>
 </html>

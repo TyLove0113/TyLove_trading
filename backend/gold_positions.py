@@ -108,6 +108,38 @@ def close(pid: int) -> None:
                   "WHERE id=?", (_now(), pid))
 
 
+def update(pid: int, d: dict) -> bool:
+    """手動更正持倉數值（2026-10-07 新增）。
+
+    用戶反映「系統有時計錯」—— OCR 讀交易分頁時，
+    入場價／止蝕／目標可能讀歪。呢度容許逐筆手動改返。
+    """
+    init_db()
+    fields, vals = [], []
+    for k in ("direction", "entry", "stop", "target", "lot"):
+        if k in d and d[k] not in (None, ""):
+            fields.append(k + "=?")
+            if k == "direction":
+                vals.append(str(d[k]).strip().lower())
+            else:
+                try:
+                    vals.append(float(d[k]))
+                except (TypeError, ValueError):
+                    continue
+    if "opened_at" in d and d["opened_at"] not in (None, ""):
+        fields.append("opened_at=?")
+        vals.append(str(d["opened_at"]).replace("T", " ").strip()[:19])
+    if not fields:
+        return False
+    fields.append("updated_at=?")
+    vals.append(_now())
+    vals.append(pid)
+    with _conn() as c:
+        cur = c.execute("UPDATE gold_positions SET " + ", ".join(fields) +
+                        " WHERE id=?", vals)
+        return cur.rowcount > 0
+
+
 def close_by_ticket(ticket, exit_price=None, pnl_usd=None) -> bool:
     """由 ticket 自動平倉。
 
@@ -229,6 +261,14 @@ def check(price: float) -> list[dict]:
     return out
 
 
+def _p2(v):
+    """價格一律印兩位小數（2026-10-07：之前出過「4104.2001953125」）。"""
+    try:
+        return "%.2f" % float(v)
+    except (TypeError, ValueError):
+        return v if v else "—"
+
+
 def fmt_alert(a: dict) -> str:
     """監控提示訊息。"""
     p, price, st = a["pos"], a["price"], a["state"]
@@ -242,8 +282,9 @@ def fmt_alert(a: dict) -> str:
     lines = [head, ""]
     lines.append("%s　%s手　#%s" % (d, p.get("lot"), p.get("ticket") or "—"))
     lines.append("入場 %s　止蝕 %s　目標 %s" % (
-        p.get("entry"), p.get("stop") or "—", p.get("target") or "—"))
-    lines.append("現價 *%s*" % price)
+        _p2(p.get("entry")), _p2(p.get("stop")) or "—", _p2(p.get("target")) or "—"))
+    # 2026-10-07：現價之前用 %s 直接印浮點數，出過「4104.2001953125」。
+    lines.append("現價 *%s*" % _p2(price))
     if st in ("stop", "near_stop"):
         lines.append("")
         lines.append("止蝕距離得返 *%.2f* 美元。你話過唔想我幫你落單 —— "

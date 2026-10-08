@@ -225,6 +225,88 @@ def _status() -> str:
 
 
 # ------------------------------------------------------------------ 處理
+# 2026-10-07：平倉逐步對話狀態（每個 chat 一份）
+_CLOSE_FLOW: dict = {}
+
+
+def _help_kb():
+    """ /help 嘅泡泡按鈕 —— 用戶反映打指令麻煩，想直接㩒。 """
+    return [
+        [{"text": "\U0001F4CA /status 睇記錄同盈虧", "callback_data": "cmd:status"}],
+        [{"text": "\U0001F4CC /pos 睇未平倉持倉", "callback_data": "cmd:pos"}],
+        [{"text": "\u2705 /close 平倉（逐步填數）", "callback_data": "cmd:close"}],
+        [{"text": "\U0001F4DD /note 寫日記", "callback_data": "cmd:note"}],
+    ]
+
+
+def _close_kb(op):
+    """列出每張持倉做一顆按鈕。"""
+    rows = []
+    for x in op:
+        rows.append([{
+            "text": "#%s %s %s手 入 %s" % (
+                x["id"], "\U0001F7E2做多" if x.get("direction") == "long" else "\U0001F534做空",
+                x.get("lot"), x.get("entry")),
+            "callback_data": "cl:%s" % x["id"]}])
+    return rows
+
+
+def _skip_kb(step):
+    return [[{"text": "\u23ED 跳過呢步", "callback_data": "clskip:%s" % step}]]
+
+
+def _pos_text() -> str:
+    import gold_positions as gp
+    return gp.fmt_list()
+
+
+def _help_or_close() -> str:
+    """平倉揀張（配 _close_kb 按鈕用）。"""
+    import gold_positions as gp
+    return "\U0001F534 *\u64c7\u908a\u5f35\u5e73\u5009\uff1f*\n\n\u4e0b\u9762\u6309\u4e00\u4e0b\u5c31\u5f97\uff0c\u5514\u4f7f\u6253\u5b57\u3002"
+
+
+def _ask_exit(token, chat, pid):
+    _CLOSE_FLOW[str(chat)] = {"pid": pid, "step": "exit", "exit": None}
+    _send(token, chat,
+          "\U0001F4B0 *#%s* 平倉價係幾多？\n\n直接打個數字（例如 `4118.30`），"
+          "或者㩒下面跳過。" % pid,
+          keyboard=_skip_kb("exit"))
+
+
+def _ask_pnl(token, chat):
+    _CLOSE_FLOW[str(chat)]["step"] = "pnl"
+    _send(token, chat,
+          "\U0001F4B5 盈虧係幾多美元？（賺就打正數，蝕就打負數，例如 `-28.55`）",
+          keyboard=_skip_kb("pnl"))
+
+
+def _finish_close(token, chat, pid, ex, pnl):
+    import gold_positions as gp
+    import journal as J
+    with gp._conn() as c:
+        row = c.execute("SELECT ticket FROM gold_positions WHERE id=?", (pid,)).fetchone()
+    if not row:
+        _send(token, chat, "\u274C 搵唔到 #%s \u2014\u2014 可能已經平咗。" % pid)
+        _CLOSE_FLOW.pop(str(chat), None)
+        return
+    gp.close_by_ticket(row["ticket"] or str(pid), ex, pnl)
+    _CLOSE_FLOW.pop(str(chat), None)
+    try:
+        n = J.stats().get("n_closed", 0)
+    except Exception:  # noqa: BLE001
+        n = 0
+    msg = "\u2705 *#%s 已經平倉*\n" % pid
+    if ex is not None:
+        msg += "平倉價 %s\n" % ex
+    if pnl is not None:
+        msg += "盈虧 %s 美元\n" % pnl
+    msg += "\n\U0001F4D2 交易日誌而家有 *%d* 筆記錄。" % n
+    if ex is None and pnl is None:
+        msg += "\n\n\u26A0\uFE0F 冇填數值，所以未計入盈虧統計。"
+    _send(token, chat, msg)
+
+
 def _handle(token: str, my_chat, u: dict) -> None:
     # ① Inline 按鈕
     cq = u.get("callback_query")
@@ -233,6 +315,50 @@ def _handle(token: str, my_chat, u: dict) -> None:
             data = cq.get("data") or ""
             msg = cq.get("message") or {}
             if str(msg.get("chat", {}).get("id")) != str(my_chat):
+                return
+            # 2026-10-07：新增 cmd:*（指令按鈕）同 cl:*／clskip:*（平倉流程）
+            if data == "cmd:status":
+                _send(token, my_chat, _status())
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
+                return
+            if data == "cmd:pos":
+                _send(token, my_chat, _pos_text())
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
+                return
+            if data == "cmd:close":
+                _send(token, my_chat, _help_or_close())
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
+                return
+            if data == "cmd:note":
+                import gold_notes as N
+                _send(token, my_chat,
+                      "\U0001F4DD *\u5beb\u65e5\u8a18*\n\n"
+                      "\u6253 `/note \u4f60\u5605\u5167\u5bb9`\n"
+                      "\u4f8b\uff1a`/note \u4eca\u65e5 H1 \u65b9\u5411\u6b63\u78ba\uff0c"
+                      "\u4f46\u982d\u5169\u7b46\u88ab\u5047\u7a81\u7834\u6383\u8d70`\n\n"
+                      "\u60f3\u9023\u622a\u5716\u4e00\u9f4a\u8a18\uff0c\u4e0a\u7db2\u9801 /gold\u3002\n"
+                      "\u800c\u5bb6\u7e3d\u5171 %d \u7bc7\u3002" % len(N.all_notes()),
+                      keyboard=_help_kb())
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
+                return
+            if data.startswith("cl:"):
+                try:
+                    pid = int(data.split(":", 1)[1])
+                except ValueError:
+                    pid = None
+                if pid is not None:
+                    _ask_exit(token, my_chat, pid)
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
+                return
+            if data.startswith("clskip:"):
+                st = data.split(":", 1)[1]
+                f = _CLOSE_FLOW.get(str(my_chat)) or {}
+                if f.get("pid"):
+                    if st == "exit":
+                        _ask_pnl(token, my_chat)
+                    else:
+                        _finish_close(token, my_chat, f["pid"], f.get("exit"), None)
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
                 return
             ids = [int(x) for x in data.split(":", 1)[1].split(",") if x.strip().isdigit()]
             if data.startswith("ok:"):
@@ -252,6 +378,21 @@ def _handle(token: str, my_chat, u: dict) -> None:
     text = (msg.get("text") or "").strip()
 
     # ② 指令
+    # 2026-10-07：平倉逐步對話 —— 用戶啱啱被問平倉價／盈虧，呢句就係答案
+    _f = _CLOSE_FLOW.get(str(my_chat)) or {}
+    if _f.get("pid") and _f.get("step") in ("exit", "pnl") and not text.startswith("/"):
+        try:
+            val = float(text.replace(",", "").replace("$", "").strip())
+        except ValueError:
+            _send(token, my_chat, "\u274C 睇唔明呢個數。打個數字，例如 `4118.30`。")
+            return
+        if _f["step"] == "exit":
+            _f["exit"] = val
+            _ask_pnl(token, my_chat)
+        else:
+            _finish_close(token, my_chat, _f["pid"], _f.get("exit"), val)
+        return
+
     if text.startswith("/status"):
         _send(token, my_chat, _status())
         return
@@ -266,6 +407,23 @@ def _handle(token: str, my_chat, u: dict) -> None:
               "🧹 清走咗 %d 張持倉記錄。\n\n"
               "（唔係平倉，只係唔再監控。想再監控就再傳「交易」分頁截圖。）" % n)
         return
+    if text.startswith("/note"):
+        # 2026-10-07：用戶要求可以寫文字日記（紀錄觀察、檢討）。
+        # 網頁可以連截圖一齊儲；Telegram 呢度收純文字。
+        import gold_notes as N
+        body = text.partition(" ")[2].strip()
+        if not body:
+            _send(token, my_chat,
+                  "📝 *寫日記*\\n\\n打 `/note 你嘅內容`\\n"
+                  "例：`/note 今日 H1 方向正確，但頭兩筆被假突破掃走止蝕`\\n\\n"
+                  "想連截圖一齊記，就上網頁 /gold 用「交易日記」。",
+                  keyboard=_help_kb())
+            return
+        N.add(body, "", None, "telegram")
+        _send(token, my_chat, "✅ 日記已儲存。\\n\\n📒 而家總共 %d 篇。"
+              % len(N.all_notes()), keyboard=_help_kb())
+        return
+
     if text.startswith("/close"):
         # 2026-10-07：用戶反映 Telegram 完全冇方法記錄平倉，只可以上網頁。
         #   /close              → 列出持倉叫你揀
@@ -278,15 +436,9 @@ def _handle(token: str, my_chat, u: dict) -> None:
             op = gp.all_open()
             if not op:
                 _send(token, my_chat, "\U0001f4ed \u800c\u5bb6\u5187\u672a\u5e73\u5009\u6301\u5009\u3002")
-            else:
-                L = ["\U0001f534 *\u63c0\u908a\u5f35\u5e73\u5009\uff1f*\u3000\u6253 `/close \u7de8\u865f`\n"]
-                for q in op:
-                    L.append("#%s %s %s\u624b\u3000\u5165 %s\u3000\u6b62 %s" % (
-                        q["id"],
-                        "\U0001f7e2\u505a\u591a" if q.get("direction") == "long" else "\U0001f534\u505a\u7a7a",
-                        q.get("lot"), q.get("entry"), q.get("stop")))
-                L.append("\n\u60f3\u9806\u4fbf\u8a18\u6578\u503c\uff1a`/close \u7de8\u865f \u5e73\u5009\u50f9 \u76c8\u8667`")
-                _send(token, my_chat, "\n".join(L))
+                return
+            # 2026-10-07：改用泡泡按鈕，唔使打編號
+            _send(token, my_chat, _help_or_close(), keyboard=_close_kb(op))
             return
         pid = int(parts[1].lstrip("#"))
         with gp._conn() as c:
@@ -316,7 +468,8 @@ def _handle(token: str, my_chat, u: dict) -> None:
               "/close 平倉（可以喺呢度直接做）\n"
               "　 /close 2　　　　　　　→ 平倉 #2\n"
               "　 /close 2 4148.03 -27.70　→ 連平倉價、盈虧一齊記\n"
-              "（想改數值就上網頁 /gold 改完先確認）")
+              "（想改數值就上網頁 /gold 改完先確認）",
+              keyboard=_help_kb())
         return
 
     # ③ 圖片

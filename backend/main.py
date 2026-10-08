@@ -821,19 +821,27 @@ def gold_notes():
     if request.method == "GET":
         return jsonify({"ok": True, "notes": N.all_notes()})
     try:
-        img = ""
-        up = request.files.get("image")
-        if up and up.filename:
-            from datetime import datetime as _dt
-            name = _dt.now().strftime("%Y%m%d-%H%M%S") + "-note.jpg"
+        # 2026-10-08：用戶反映一張圖唔夠用（M15／H1／MT4 各一張），
+        # 改為一次可以上載多張。前端用 <input multiple>，欄位名一樣叫 image。
+        imgs = []
+        files = request.files.getlist("image") or request.files.getlist("images")
+        from datetime import datetime as _dt
+        for up in files:
+            if not up or not up.filename:
+                continue
+            ext = os.path.splitext(up.filename)[1].lower() or ".jpg"
+            if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                ext = ".jpg"
+            name = _dt.now().strftime("%Y%m%d-%H%M%S-%f") + "-note" + ext
             os.makedirs(_shot_dir(), exist_ok=True)
             up.save(os.path.join(_shot_dir(), name))
-            img = name
+            imgs.append(name)
         d = request.form if request.form else (request.get_json(silent=True) or {})
-        if not (d.get("body") or "").strip() and not img:
+        if not (d.get("body") or "").strip() and not imgs:
             return jsonify({"ok": False, "error": "冇內容"})
-        nid = N.add(d.get("body") or "", img, d.get("trade_date"), "web")
-        return jsonify({"ok": True, "id": nid, "notes": N.all_notes()})
+        nid = N.add(d.get("body") or "", imgs, d.get("trade_date"), "web")
+        return jsonify({"ok": True, "id": nid, "saved_images": len(imgs),
+                        "notes": N.all_notes()})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "error": str(exc)})
 

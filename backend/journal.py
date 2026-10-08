@@ -96,6 +96,14 @@ def _migrate(c) -> None:
         if "ticket" not in cols:
             c.execute("ALTER TABLE gold_trades ADD COLUMN ticket TEXT")
             log.info("已為 gold_trades 加入 ticket 欄位")
+        # ── 2026-10-08 自動修復 ──
+        # 已經填咗出場價、但狀態仍然係 open 嘅記錄，一律標記為已平倉。
+        # 成因：update_trade 以前唔接受 exit_price／status，
+        # 所以用戶撳完平倉、輸入完資料，交易日誌仍然寫住「持倉中」。
+        n = c.execute("UPDATE gold_trades SET status='closed' "
+                      "WHERE status='open' AND exit_price IS NOT NULL").rowcount
+        if n:
+            log.info("已修正 %d 筆『有出場價但仍然持倉中』嘅記錄", n)
     except sqlite3.Error:
         log.exception("遷移失敗")
 
@@ -163,6 +171,32 @@ def update_trade(tid: int, d: dict) -> bool:
     if "note" in d:
         fields.append("note=?")
         vals.append((d["note"] or "").strip() or None)
+    # ── 2026-10-08 新增：出場價／盈虧／平倉時間 ──
+    # 用戶反映兩件事：
+    #  ① 編輯表單根本冇出場價同盈虧，佢想自己改（系統嘅盈虧計法同佢實際唔同）；
+    #  ② 撳完平倉、輸入完資料，交易日誌仍然寫住「持倉中」。
+    # 根因：呢個函數嘅可改欄位清單冇 exit_price / pnl_usd / status。
+    # 只有填咗實際值才覆蓋，避免表單空白欄位清走已記錄嘅盈虧。
+    # （測試揭發：如果唔設呢個保護，改備註時會連盈虧一齊清走。）
+    for k in ("exit_price", "pnl_usd"):
+        if k in d and str(d[k] if d[k] is not None else "").strip() != "":
+            fields.append(f"{k}=?")
+            vals.append(_f(d[k]))
+    if "closed_at" in d and d["closed_at"] not in (None, ""):
+        fields.append("closed_at=?")
+        vals.append(str(d["closed_at"]).replace("T", " ").strip()[:19])
+    # 只要填咗出場價或者盈虧 → 自動標記為已平倉（唔再顯示「持倉中」）
+    _has_exit = (str(d.get("exit_price") or "").strip() != ""
+                 or str(d.get("pnl_usd") or "").strip() != "")
+    if _has_exit:
+        fields.append("status=?")
+        vals.append("closed")
+        if "closed_at" not in d or d["closed_at"] in (None, ""):
+            fields.append("closed_at=?")
+            vals.append(_now())
+    # 2026-10-08 註：刻意唔做「清空出場價就還原為持倉中」——
+    # 表單每次都會送出空白欄位，一做就會令已平倉嘅舊記錄被誤改返持倉中。
+    # 要重開就直接上資料庫改，唔好靠表單空白值判斷用戶意圖。
     if "direction" in d and str(d["direction"]).lower() in ("long", "short"):
         fields.append("direction=?")
         vals.append(str(d["direction"]).lower())

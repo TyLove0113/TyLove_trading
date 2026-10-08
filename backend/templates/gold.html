@@ -157,6 +157,12 @@
       <label class="block col-span-2">備註
         <input id="jNote" type="text" placeholder="例如：追咗高、等唔到回踩" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
       </label>
+      <label class="block">出場價 <span class="text-slate-500">（填咗就自動完結）</span>
+        <input id="jExitPrice" type="number" step="0.01" placeholder="例如 4103.76" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
+      <label class="block">盈虧 <span class="text-slate-500">（美元，可以自己填）</span>
+        <input id="jPnl" type="number" step="0.01" placeholder="例如 -29.20" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+      </label>
     </div>
     <div class="flex gap-2 mt-4 flex-wrap items-center">
       <button id="jSaveBtn" onclick="saveJournal()" class="text-sm px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500">儲存記錄</button>
@@ -582,8 +588,15 @@ function jList(ts) {
   const rows = ts.map(t => {
     const open = t.status === 'open';
     const pnl = (t.pnl_usd === null || t.pnl_usd === undefined) ? null : t.pnl_usd;
-    const pnlCell = pnl === null ? '<span class="text-slate-500">持倉中</span>'
-      : `<span style="color:${pnl >= 0 ? '#86efac' : '#fca5a5'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
+    // 2026-10-08 修：以前只睇 pnl_usd，一冇填就當「持倉中」。
+    // 結果用戶填咗出場價（已真正平倉）但仍然顯示「持倉中」，令佢以為壞咗。
+    // 而家分三種：有盈虧 → 顯示數字；有出場價但冇盈虧 → 「未填盈虧」；兩者皆無 → 持倉中。
+    const hasExit = (t.exit_price !== null && t.exit_price !== undefined);
+    const pnlCell = pnl !== null
+      ? `<span style="color:${pnl >= 0 ? '#86efac' : '#fca5a5'}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`
+      : (hasExit
+         ? '<span class="text-slate-400" title="已經有出場價，但未填盈虧">未填盈虧</span>'
+         : '<span class="text-slate-500">持倉中</span>');
     const sp = (t.slip_price === null || t.slip_price === undefined) ? null : t.slip_price;
     const slip = sp === null ? '—'
       : `<span style="color:${sp > 0 ? '#fca5a5' : '#86efac'}" title="正數=對你不利">${sp > 0 ? '+' : ''}${sp.toFixed(2)}</span>`;
@@ -654,7 +667,8 @@ let jEditId = null;
 function resetForm() {
   jEditId = null;
   ['jActualEntry','jActualStop','jSpread','jNote','jSignalEntry',
-   'jSignalStop','jSignalTarget','jLot'].forEach(id => { $(id).value = ''; });
+   'jSignalStop','jSignalTarget','jLot','jExitPrice','jPnl']
+    .forEach(id => { $(id).value = ''; });
   $('jSaveBtn').textContent = '儲存記錄';
   $('jCancelBtn').classList.add('hidden');
   $('jFormTitle').textContent = '➕ 記錄一筆新交易';
@@ -678,6 +692,8 @@ function editTrade(id) {
   set('jSignalTarget', t.signal_target);
   set('jSpread', t.spread_at_entry);
   set('jNote', t.note || '');
+  set('jExitPrice', t.exit_price);
+  set('jPnl', t.pnl_usd);
   $('jFormBox').open = true;
   $('jSaveBtn').textContent = '💾 更新記錄';
   $('jCancelBtn').classList.remove('hidden');
@@ -701,7 +717,11 @@ async function saveJournal() {
     actual_stop: jNum('jActualStop'),
     signal_target: jNum('jSignalTarget'),
     spread_at_entry: jNum('jSpread'),
-    note: $('jNote').value.trim() || null
+    note: $('jNote').value.trim() || null,
+    // 2026-10-08：出場價／盈虧可以由用戶自己填（佢話系統嘅盈虧計法同實際唔同）。
+    // 填咗出場價或盈虧，後端會自動將狀態改做已平倉。
+    exit_price: jNum('jExitPrice'),
+    pnl_usd: jNum('jPnl')
   };
   body.data_source = $('jDataSource').value || null;
   const url = jEditId ? ('/api/gold/journal/' + jEditId) : '/api/gold/journal';
@@ -995,34 +1015,45 @@ async function pushGSettings(payload, okMsg){
   <textarea id="noteBody" rows="4" placeholder="例如：今日 H1 方向正確，但頭兩筆被假突破掃走止蝕……"
     style="width:100%;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:8px"></textarea>
   <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <input type="file" id="noteImg" accept="image/*" class="muted" style="font-size:12px">
+    <input type="file" id="noteImg" accept="image/*" multiple class="muted" style="font-size:12px">
     <button onclick="noteSave()"
       style="padding:6px 16px;border-radius:6px;background:#047857;color:#fff;font-size:13px">
       💾 儲存日記</button>
     <span id="noteMsg" class="muted" style="font-size:12px"></span>
   </div>
+  <div id="notePreview"></div>
   <div id="noteList" style="margin-top:12px"></div>
 </div>
 <script>
 async function noteSave(){
   const body = $('noteBody').value.trim();
-  const f = $('noteImg').files[0];
-  if (!body && !f) { $('noteMsg').textContent = '❌ 冇內容'; return; }
-  $('noteMsg').textContent = '儲存中…';
+  const files = $('noteImg').files;
+  if (!body && (!files || !files.length)) { $('noteMsg').textContent = '❌ 冇內容'; return; }
+  $('noteMsg').textContent = '儲存中…（' + (files ? files.length : 0) + ' 張圖）';
   try {
     const fd = new FormData();
     fd.append('body', body);
-    if (f) fd.append('image', f);
+    // 2026-10-08：支援一次過上載多張（M15／H1／MT4 各一張）
+    if (files) { for (let i = 0; i < files.length; i++) fd.append('image', files[i]); }
     const r = await fetch('/api/gold/notes', {method:'POST', body: fd,
-      signal: AbortSignal.timeout(30000)});
+      signal: AbortSignal.timeout(60000)});
     const d = await r.json();
     if (!d.ok) { $('noteMsg').textContent = '❌ ' + (d.error || '失敗'); return; }
-    $('noteBody').value = ''; $('noteImg').value = '';
-    $('noteMsg').textContent = '✅ 已儲存';
+    $('noteBody').value = ''; $('noteImg').value = ''; notePreview();
+    $('noteMsg').textContent = '✅ 已儲存（' + (d.saved_images || 0) + ' 張圖）';
     noteList(d.notes);
   } catch (e) {
     $('noteMsg').textContent = '❌ 儲存失敗：' + e.name;
   }
+}
+
+function notePreview(){
+  const fs = $('noteImg').files, box = $('notePreview');
+  if (!fs || !fs.length) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="muted" style="font-size:12px;margin-top:6px">已揀 '
+    + fs.length + ' 張：'
+    + Array.from(fs).map(f => f.name.replace(/&/g,'&amp;').replace(/</g,'&lt;')).join('、')
+    + '</div>';
 }
 
 function noteList(ns){
@@ -1030,13 +1061,21 @@ function noteList(ns){
   if (!ns) return;
   if (!ns.length) { box.innerHTML = '<div class="muted">仲未有日記。</div>'; return; }
   box.innerHTML = ns.map(n => {
-    const img = n.image_path
-      ? `<div style="margin-top:6px"><img src="/api/gold/shot/${encodeURIComponent(n.image_path)}"
-           style="max-width:100%;border-radius:6px;border:1px solid #334155"></div>` : '';
+    // 2026-10-08：多圖 —— 縮圖排一行，㩒落去開原圖
+    const list = n.images || (n.image_path ? [n.image_path] : []);
+    const img = list.length
+      ? `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">`
+        + list.map(fn => `<a href="/api/gold/shot/${encodeURIComponent(fn)}" target="_blank">`
+          + `<img src="/api/gold/shot/${encodeURIComponent(fn)}" `
+          + `style="height:96px;border-radius:6px;border:1px solid #334155;object-fit:cover"></a>`
+        ).join('')
+        + `</div>`
+      : '';
     const b = (n.body || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
               .replace(/\n/g,'<br>');
     return `<div style="padding:8px 0;border-top:1px solid #ffffff14">
       <div class="muted" style="font-size:12px">${n.created_at}　·　${n.source || ''}
+        ${list.length ? '　·　🖼 ' + list.length + ' 張' : ''}
         <button onclick="noteDel(${n.id})"
           style="margin-left:8px;padding:1px 8px;border-radius:4px;background:#7f1d1d;color:#fff;font-size:11px">🗑</button>
       </div>
@@ -1051,6 +1090,9 @@ async function noteDel(id){
 }
 
 (async () => {
+  try {
+    $('noteImg').addEventListener('change', notePreview);
+  } catch (e) { /* 唔阻主流程 */ }
   try {
     const d = await (await fetch('/api/gold/notes')).json();
     noteList(d.notes);

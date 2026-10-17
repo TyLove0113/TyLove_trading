@@ -90,7 +90,7 @@ def save_from_ocr(rows: list, source: str = "mt4") -> dict:
                     "target, lot, opened_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
                     (tk, r.get("direction"), entry, r.get("actual_stop"),
                      r.get("signal_target_hint"), r.get("lots"),
-                     r.get("opened_at"), _now()))
+                     str(r.get("opened_at") or _now()).replace("T", " ").strip()[:19]))
                 added += 1
     return {"added": added, "updated": updated, "total": added + updated}
 

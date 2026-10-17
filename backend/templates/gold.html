@@ -410,7 +410,14 @@ async function jOcrStatus(){
 
         + '／pytesseract ' + (d.tesseract_import ? '✅' : '❌')
         + '／tesseract 執行檔 ' + (d.tesseract_binary ? '✅' : '❌') + '</div>'
-        + rows + '<div style="margin-top:6px">' + (d.hint || '') + '</div>';
+        + rows + '<div style="margin-top:6px">' + (d.hint || '') + '</div>'
+        // 2026-10-15：tesseract 執行檔唔見時，直接講清楚點修。
+        // 之前只顯示「執行檔 ❌」，用戶喺手機上完全唔知可以做乜。
+        + (d.boot_hint
+            ? '<div style="margin-top:8px;padding:8px;border-radius:6px;'
+              + 'background:#7f1d1d33;border:1px solid #991b1b">'
+              + '<b>點修：</b>' + d.boot_hint + '</div>'
+            : '');
       er.classList.remove('hidden');
     }
   } catch (e) { /* 靜靜咁算 */ }

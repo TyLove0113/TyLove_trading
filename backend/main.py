@@ -858,7 +858,13 @@ def gold_notes_del(nid):
 @app.route("/api/gold/ocr-status", methods=["GET"])
 def gold_ocr_status():
     import ocr
-    return jsonify({"ok": True, **ocr.status()})
+    d = {"ok": True, **ocr.status()}
+    # 2026-10-15：附帶啟動時嘅檢查結果，等診斷區可以直接講出解決方法，
+    # 唔使用戶淨係見到「tesseract 執行檔 ❌」而唔知點做。
+    if not d.get("tesseract_binary") and _TESSERACT_BOOT:
+        d["boot_action"] = _TESSERACT_BOOT.get("action")
+        d["boot_hint"] = _TESSERACT_BOOT.get("hint")
+    return jsonify(d)
 
 
 @app.route("/api/db-status", methods=["GET"])
@@ -989,6 +995,7 @@ def signals_api():
 
 
 _BG_STARTED = False
+_TESSERACT_BOOT = {}   # tesseract 啟動檢查結果（2026-10-15）
 
 
 def _warn_if_not_persistent() -> None:
@@ -1022,6 +1029,19 @@ def start_background():
     init_db()
     import journal; journal.init_db()
     _warn_if_not_persistent()
+    # 2026-10-15：啟動時自己檢查 tesseract 執行檔。
+    # 之前 Railway 建置冇裝到，整個 OCR 停擺，用戶喺手機上完全唔知點算。
+    # 呢度會試即時安裝，並將結果寫入日誌（網頁診斷區都會顯示）。
+    try:
+        import tesseract_setup
+        _r = tesseract_setup.ensure()
+        if _r.get("ok"):
+            log.info("tesseract 就緒：%s（%s）", _r.get("path"), _r.get("action"))
+        else:
+            log.error("tesseract 唔可用：%s。%s", _r.get("action"), _r.get("hint", ""))
+            _TESSERACT_BOOT = _r
+    except Exception:  # noqa: BLE001
+        log.exception("檢查 tesseract 時出錯（唔阻啟動）")
     threading.Thread(target=scheduler_loop, daemon=True).start()
     # 開機先做一次掃描，確認設定正確
     threading.Thread(target=lambda: (time.sleep(5), job_scan("啟動掃描")), daemon=True).start()

@@ -21,14 +21,14 @@
 //  v1.0  2026-09-23  第一版
 //+------------------------------------------------------------------+
 #property copyright "TyLove"
-#property version   "2.10"
+#property version   "2.20"
 #property strict
 
-#define EA_VERSION "v2.1"
+#define EA_VERSION "v2.2"
 
 //================= 你只需要改呢兩行 =================
-extern string API_BASE         = "https://tylovetrading-production.up.railway.app";
-extern string FEED_TOKEN       = "TyLove_Gold";
+extern string API_BASE         = "https://xxxx.up.railway.app";
+extern string FEED_TOKEN       = "";
 //===================================================
 
 extern int    TickSeconds      = 5;    // 每幾秒推一次即時報價
@@ -37,11 +37,14 @@ extern int    BarCountFull     = 300;  // 開頭推幾多支歷史 K 線
 extern int    BarCountQuick    = 6;    // 之後每次補推幾多支
 extern int    PushBarsEveryMin = 5;    // 每幾分鐘補推一次 K 線
 extern string SymbolName       = "";   // 留空 = 用圖表本身嘅品種
+extern int    DealsOnStart      = 50;  // 開頭推幾多筆歷史成交
+extern int    DealsEveryMin     = 5;   // 每幾分鐘檢查有無新成交
 
 string   g_sym;
 string   g_base;                 // 正規化後嘅 API 網址（一定有 https://）
 int      g_tf, g_digits, g_tzOffset = 0;
 datetime g_lastBarPush    = 0;   // 用 TimeLocal() 計
+datetime g_lastDealPush   = 0;   // 上次檢查成交記錄
 datetime g_lastServerTime = 0;   // 上次見到嘅券商時間
 datetime g_lastQuoteAt    = 0;   // 上次「券商時間有前進」嘅電腦時間
 int      g_quoteLag       = 0;   // 券商報價落後幾秒
@@ -108,6 +111,54 @@ bool Post(string path, string body) {
     return (false);
 }
 
+// ---------------------------------------------------------------- 成交記錄
+// 2026-09-30 新增。想自動記錄交易日誌，唔想手動打字或者 OCR 認圖。
+//
+// 關鍵：MT4 嘅成交記錄係存喺【券商伺服器】，桌面版會下載返嚟。
+// 所以你用手機 app 落嘅單，桌面版呢個 EA 一樣讀得到 ——
+// 前提只係桌面版開住（你推報價本身已經要開）。
+//
+// 系統收到之後唔會直接入帳，會開一張「草稿」，
+// 你要喺網頁核對完撳「確認」先成為正式記錄。
+void SendDeals(int n) {
+    int total = OrdersHistoryTotal();
+    if (total <= 0) return;
+    string arr = "";
+    int cnt = 0;
+    for (int i = total - 1; i >= 0 && cnt < n; i--) {
+        if (!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
+        if (OrderSymbol() != g_sym) continue;
+        int t = OrderType();
+        if (t != OP_BUY && t != OP_SELL) continue;
+        if (OrderCloseTime() <= 0) continue;      // 未平倉，跳過
+
+        string cm = OrderComment();
+        StringReplace(cm, "\"", "'");             // 避免整爛 JSON
+
+        if (cnt > 0) arr += ",";
+        arr += "{\"ticket\":" + IntegerToString(OrderTicket())
+             + ",\"direction\":\"" + (t == OP_BUY ? "buy" : "sell") + "\""
+             + ",\"lots\":" + DoubleToString(OrderLots(), 2)
+             + ",\"open_ts\":" + IntegerToString((int)OrderOpenTime() - g_tzOffset)
+             + ",\"open_price\":" + DoubleToString(OrderOpenPrice(), g_digits)
+             + ",\"close_ts\":" + IntegerToString((int)OrderCloseTime() - g_tzOffset)
+             + ",\"close_price\":" + DoubleToString(OrderClosePrice(), g_digits)
+             + ",\"sl\":" + DoubleToString(OrderStopLoss(), g_digits)
+             + ",\"tp\":" + DoubleToString(OrderTakeProfit(), g_digits)
+             + ",\"profit\":" + DoubleToString(OrderProfit() + OrderSwap()
+                                              + OrderCommission(), 2)
+             + ",\"comment\":\"" + cm + "\"}";
+        cnt++;
+    }
+    if (cnt == 0) return;
+    string body = "{\"symbol\":\"" + g_sym + "\",\"source\":\"mt4\",\"deals\":["
+                  + arr + "]}";
+    if (Post("/api/gold/deals", body))
+        Print("✅ 已推 ", cnt, " 筆成交記錄（系統會開草稿等你確認）");
+}
+
+
+
 void SendTick() {
     double bid = MarketInfo(g_sym, MODE_BID);
     double ask = MarketInfo(g_sym, MODE_ASK);
@@ -169,6 +220,7 @@ int OnInit() {
         Print("🔧 API_BASE 冇協定，已自動修正：", API_BASE, " → ", g_base);
 
     Print("品種 ", g_sym, "　週期 M", BarMinutes, "　每 ", TickSeconds, " 秒推一次");
+    SendDeals(DealsOnStart);   // 開頭補推歷史成交，等系統有齊記錄
     Print("券商 server 同 UTC 相差 ", g_tzOffset / 3600.0, " 小時");
     Print("目標 ", g_base);
     Print("⚠️ 如果一直收唔到數據，去「工具 → 選項 → 智能交易系統 →"
@@ -202,6 +254,13 @@ void OnTimer() {
     if (TimeLocal() - g_lastBarPush >= PushBarsEveryMin * 60) {
         g_lastBarPush = TimeLocal();
         SendBars(BarCountQuick);
+    }
+
+    // 2026-09-30：定時檢查有無新成交（用手機落單都會出現喺呢度）。
+    // 系統會 dedupe（同一 ticket 唔會重複），所以重推係安全嘅。
+    if (TimeLocal() - g_lastDealPush >= DealsEveryMin * 60) {
+        g_lastDealPush = TimeLocal();
+        SendDeals(20);
     }
     ShowStatus();
 }

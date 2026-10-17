@@ -83,6 +83,20 @@ def _f(v):
 
 
 
+def _norm_dt(v) -> str:
+    """統一時間格式做 'YYYY-MM-DD HH:MM'（去掉 ISO 嘅 'T'）。
+
+    2026-10-08：前端 datetime-local 送出嘅係 ISO 格式（2026-10-07T11:31）。
+    以前 add_trade 原樣儲存，update_trade 才做轉換 —— 結果資料庫入面
+    兩種格式並存。文字排序時 'T'(0x54) 大過空格(0x20)，
+    所有 ISO 記錄都會排喺空格格式之後，睇落就好似 11:31 排喺 20:49 後面。
+    """
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    return s.replace("T", " ")[:19]
+
+
 def _migrate(c) -> None:
     """為舊資料庫補新欄位（SQLite 唔支援 ADD COLUMN IF NOT EXISTS）。"""
     try:
@@ -104,6 +118,13 @@ def _migrate(c) -> None:
                       "WHERE status='open' AND exit_price IS NOT NULL").rowcount
         if n:
             log.info("已修正 %d 筆『有出場價但仍然持倉中』嘅記錄", n)
+        # ── 2026-10-08 統一時間格式 ──
+        # 舊資料混雜 ISO 格式（帶 'T'），令文字排序出錯
+        # （你見過 11:31 排喺 20:49 之後就係咁）。
+        m = c.execute("UPDATE gold_trades SET opened_at = replace(opened_at,'T',' ') "
+                      "WHERE opened_at LIKE '%T%'").rowcount
+        if m:
+            log.info("已統一 %d 筆記錄嘅時間格式", m)
     except sqlite3.Error:
         log.exception("遷移失敗")
 
@@ -132,7 +153,7 @@ def add_trade(d: dict) -> int:
                 spread_at_entry, followed, note, status, data_source,
                 closed_at, exit_price, pnl_usd, shot, ticket)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ((d.get("opened_at") or d.get("entered_at") or "").strip() or _now(),
+            (_norm_dt(d.get("opened_at") or d.get("entered_at")) or _now(),
              direction,
              _f(d.get("signal_entry")), actual,
              _f(d.get("signal_stop")), _f(d.get("signal_target")),
@@ -252,8 +273,10 @@ def list_trades(limit: int = 200, include_draft: bool = False) -> list[dict]:
     # 之前用 id DESC（建立次序），所以你遲啲補記舊交易時，
     # 記錄會插喺中間，睇落好似亂咗 —— 用戶反映過。
     # 冇填開倉時間嘅排最後，唔阻你睇有時間嘅記錄。
+    # 排序時再做一次 'T'→空白 正規化做雙重保險：即使有舊資料未經遷移，
+    # 都唔會再出現「11:31 排喺 20:49 之後」呢種情況。
     _ord = ("ORDER BY (opened_at IS NULL OR opened_at=''), "
-            "opened_at ASC, id ASC LIMIT ?")
+            "replace(opened_at,'T',' ') ASC, id ASC LIMIT ?")
     with _conn() as c:
         if include_draft:
             rows = c.execute("SELECT * FROM gold_trades " + _ord, (limit,)).fetchall()
@@ -384,7 +407,7 @@ def drafts() -> list:
         with _conn() as c:
             rs = c.execute("SELECT * FROM gold_trades WHERE status='draft' "
                            "ORDER BY (opened_at IS NULL OR opened_at=''), "
-                           "opened_at ASC, id ASC").fetchall()
+                           "replace(opened_at,'T',' ') ASC, id ASC").fetchall()
         return [dict(r) for r in rs]
     except sqlite3.Error:
         log.exception("讀取草稿失敗")

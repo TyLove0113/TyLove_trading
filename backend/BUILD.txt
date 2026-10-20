@@ -1,0 +1,4 @@
+v4.2-20261020-0930
+2026-10-20 09:30 香港時間
+改動：修 gold_positions.save_from_ocr 缺參數（ProgrammingError）
+      Telegram 錯誤訊息顯示實際原因

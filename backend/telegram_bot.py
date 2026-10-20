@@ -536,7 +536,12 @@ def _handle(token: str, my_chat, u: dict) -> None:
                  len(trades), len(created), len(skipped))
     except Exception as e:  # noqa: BLE001
         log.exception("Telegram OCR 失敗")
-        _send(token, my_chat, "❌ 出錯：%s" % type(e).__name__)
+        # 2026-10-20：之前只顯示錯誤類別名（例如「ProgrammingError」），
+        # 用戶同我都睇唔出發生咩事。而家連訊息一齊顯示。
+        _detail = str(e).strip().replace("\n", " ")[:160]
+        _send(token, my_chat,
+              "❌ 出錯：*%s*\n%s\n\n再傳一次試吓；如果重複出現，"
+              "請將呢句截圖俾我。" % (type(e).__name__, _detail or "（冇詳細訊息）"))
 
 
 def poll_loop(channel: str = "gold") -> None:

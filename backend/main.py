@@ -299,10 +299,24 @@ def index():
     return render_template("index.html")
 
 
+def _build_tag() -> str:
+    """讀 BUILD.txt 嘅第一行，用嚟確認部署有冇成功。
+    2026-10-20：用戶上載 zip 到 GitHub 時遇到「無野 update」，
+    分唔清係咪部署咗新版本。有呢個標記就可以直接核對。
+    """
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "BUILD.txt"),
+                  encoding="utf-8") as f:
+            return f.readline().strip()
+    except OSError:
+        return "unknown"
+
+
 @app.route("/api/health")
 def health():
     return jsonify({"ok": True, "time": now_hk().strftime("%Y-%m-%d %H:%M:%S"),
-                    "running": _STATE["running"]})
+                    "running": _STATE["running"],
+                    "build": _build_tag()})
 
 
 @app.route("/api/state")

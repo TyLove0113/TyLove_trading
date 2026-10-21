@@ -251,6 +251,36 @@ def fmt_error(where: str, err: str) -> str:
 
 
 # ------------------------------------------------------------------ 格式化：黃金
+def _bias_line(bias) -> str:
+    """H1 當日方向 —— 2026-10-21 改。
+
+    之前寫「當日方向：只做升」之後跟住「理由：EMA20 低於 EMA50（下降趨勢）」。
+    雖然邏輯冇錯（前者係 H1、後者係 15 分鐘），但兩句並排睇落好似自相矛盾，
+    用戶同我都誤以為係舊 bug。而家明確分開，連 H1 嘅依據都寫出嚟。
+    """
+    if not bias:
+        return ""
+    up = bias == "long"
+    return ("📅 *H1 當日方向*：只做*%s*\n     ↳ H1 EMA20 %s EMA50（%s趨勢，當日固定）"
+            % ("升" if up else "跌", "高於" if up else "低於", "上升" if up else "下降"))
+
+
+def _trend_line(reasons) -> str:
+    """15 分鐘趨勢 —— 同 H1 可以相反，要獨立一行寫清楚。"""
+    for r in reasons or []:
+        if r.startswith("EMA20 高於"):
+            return "📈 *15 分鐘趨勢*：EMA20 高於 EMA50（上升）"
+        if r.startswith("EMA20 低於"):
+            return "📈 *15 分鐘趨勢*：EMA20 低於 EMA50（下降）"
+    return ""
+
+
+def _other_reasons(reasons) -> list:
+    """剔走 15 分鐘趨勢（已獨立一行顯示），其餘照舊。"""
+    return [r for r in (reasons or [])
+            if not r.startswith("EMA20 高於") and not r.startswith("EMA20 低於")]
+
+
 def fmt_gold_signal(g: dict) -> str:
     """黃金訊號通知（正式版：K 線已收盤）。"""
     if not g.get("has_signal"):
@@ -324,9 +354,9 @@ def fmt_gold_signal(g: dict) -> str:
         # 嘅時間，唔係真正延遲 —— 令人以為遲咗 15 分鐘。真正延遲係「收盤到發出」。
         f"⏱ *真正延遲* {max(0.0, (age or 0) - 15):.1f} 分鐘（K 線收盤 → 系統發出）",
         "",
-        (f"📅 當日方向：只做*{'升' if g.get('daily_bias')=='long' else '跌'}*"
-         "（H1 EMA 趨勢，當日固定）" if g.get("daily_bias") else ""),
-        "理由：" + "；".join(g.get("reasons", [])[:3]),
+        _bias_line(g.get("daily_bias")),
+        _trend_line(g.get("reasons", [])),
+        "理由：" + "；".join(_other_reasons(g.get("reasons", []))[:3]),
         "",
         f"⚠️ {g.get('disclaimer','')}",
         "─ 落單由你本人喺 MT4 執行，記住填 S/L ─",

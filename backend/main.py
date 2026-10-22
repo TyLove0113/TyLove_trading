@@ -157,6 +157,13 @@ def job_gold_scan():
         job_position_watch()
     except Exception:  # noqa: BLE001
         log.exception("持倉監控失敗")
+    # 2026-10-22：虛擬倉結算 —— 用最新 15 分鐘 K 線判定輸贏。
+    # 每輪掃描做一次就夠，唔需要獨立排程。
+    try:
+        import gold_paper
+        gold_paper.settle()
+    except Exception:  # noqa: BLE001
+        log.exception("虛擬倉結算失敗")
 
 
 def job_position_watch():
@@ -879,6 +886,13 @@ def gold_ocr_status():
         d["boot_action"] = _TESSERACT_BOOT.get("action")
         d["boot_hint"] = _TESSERACT_BOOT.get("hint")
     return jsonify(d)
+
+
+@app.route("/api/gold/paper")
+def gold_paper_api():
+    """虛擬落單統計（2026-10-22 新增）。"""
+    import gold_paper
+    return jsonify({"ok": True, **gold_paper.stats()})
 
 
 @app.route("/api/db-status", methods=["GET"])

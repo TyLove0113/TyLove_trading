@@ -559,6 +559,8 @@ def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
             "bar_window": (t + pd.Timedelta(minutes=15)).strftime("%H:%M"),
             "live_feed": _live(),
             "daily_bias": _b,
+            # 2026-10-21：雙策略標記。A = 現有突破系統；B = 未來新策略。
+            "strategy": "A", "strategy_name": "突破",
             "spot_offset": config.GOLD_SPOT_OFFSET, "data_age_min": 0.0}
     if push:
         try:
@@ -587,6 +589,13 @@ def scan(push: bool = True) -> dict:
             g["today_trades"] = _count_today()
         except Exception:  # noqa: BLE001
             log.exception("黃金訊號存檔失敗")
+        # 2026-10-22：虛擬落單 —— 每個訊號自動開一張虛擬倉，
+        # 用戶唔需要親手做，系統自己收集統計樣本。
+        try:
+            import gold_paper
+            gold_paper.open_from_signal(g)
+        except Exception:  # noqa: BLE001
+            log.exception("虛擬倉開啟失敗")
         if push:
             try:
                 import notifier

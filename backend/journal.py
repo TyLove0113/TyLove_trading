@@ -104,6 +104,14 @@ def _migrate(c) -> None:
         if "data_source" not in cols:
             c.execute("ALTER TABLE gold_trades ADD COLUMN data_source TEXT")
             log.info("已為 gold_trades 加入 data_source 欄位")
+        # ── 2026-10-21 雙策略標記 ──
+        # 用戶提出：保留現有系統做「A」，另外設計新策略做「B」，
+        # 兩邊訊號要清楚標明，日誌亦要記錄跟咗邊個。
+        # 舊記錄一律當 A（當時只有一套策略）。
+        if "strategy" not in cols:
+            c.execute("ALTER TABLE gold_trades ADD COLUMN strategy TEXT")
+            c.execute("UPDATE gold_trades SET strategy='A' WHERE strategy IS NULL")
+            log.info("已為 gold_trades 加入 strategy 欄位")
         if "shot" not in cols:
             c.execute("ALTER TABLE gold_trades ADD COLUMN shot TEXT")
             log.info("已為 gold_trades 加入 shot 欄位")
@@ -151,8 +159,8 @@ def add_trade(d: dict) -> int:
                (opened_at, direction, signal_entry, actual_entry,
                 signal_stop, signal_target, actual_stop, lot,
                 spread_at_entry, followed, note, status, data_source,
-                closed_at, exit_price, pnl_usd, shot, ticket)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                closed_at, exit_price, pnl_usd, shot, ticket, strategy)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (_norm_dt(d.get("opened_at") or d.get("entered_at")) or _now(),
              direction,
              _f(d.get("signal_entry")), actual,
@@ -166,7 +174,8 @@ def add_trade(d: dict) -> int:
              _f(d.get("exit_price")),
              (None if d.get("pnl_usd") in (None, "") else float(d.get("pnl_usd"))),
              (d.get("shot") or "").strip() or None,
-             (str(d.get("ticket")).strip() or None) if d.get("ticket") else None))
+             (str(d.get("ticket")).strip() or None) if d.get("ticket") else None,
+             (str(d.get("strategy") or "A").strip().upper()[:1] or "A")))
         return int(cur.lastrowid)
 
 
@@ -189,6 +198,10 @@ def update_trade(tid: int, d: dict) -> bool:
     if "followed" in d and d["followed"] in FOLLOW_OPTIONS:
         fields.append("followed=?")
         vals.append(d["followed"])
+    # 2026-10-21：雙策略標記（A = 現有突破系統／B = 新策略）
+    if "strategy" in d and str(d.get("strategy") or "").strip().upper() in ("A", "B"):
+        fields.append("strategy=?")
+        vals.append(str(d["strategy"]).strip().upper())
     if "note" in d:
         fields.append("note=?")
         vals.append((d["note"] or "").strip() or None)

@@ -103,6 +103,20 @@
   <div id="tgDiag"></div>
 </div>
 
+<!-- 虛擬落單（2026-10-22）-->
+<div class="card p-4 mb-5">
+  <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+    <div class="text-sm font-semibold">🧪 虛擬帳戶（Paper Trading）</div>
+    <button onclick="loadPaper()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">重新載入</button>
+  </div>
+  <div class="text-xs text-slate-400 mb-3 leading-relaxed">
+    每個訊號都會<b class="text-sky-300">自動開一張虛擬倉</b>，用真實後續價格判定輸贏 ——
+    <b>唔會落真單</b>，純粹幫你快速收集統計樣本。
+    <span class="text-amber-400">虛擬結果會比真實樂觀（假設無滑點）。</span>
+  </div>
+  <div id="paperBox" class="text-xs text-slate-400">載入中…</div>
+</div>
+
 <!-- 交易日誌 -->
 <div class="card p-4 mb-5">
   <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -137,6 +151,12 @@
       </label>
       <label class="block">跟足程度
         <select id="jFollowed" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700"></select>
+      </label>
+      <label class="block">跟邊個策略 <span class="text-slate-500">（2026-10-21 新增）</span>
+        <select id="jStrategy" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
+          <option value="A">🅰️ 策略 A｜突破（現有）</option>
+          <option value="B">🅱️ 策略 B｜新策略</option>
+        </select>
       </label>
       <label class="block">訊號入場價 <span class="text-slate-500">（系統報嘅）</span>
         <input id="jSignalEntry" type="number" step="0.01" class="w-full mt-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700">
@@ -540,6 +560,45 @@ async function jDiscard(id){
   loadJournal();
 }
 
+
+// ==================== 虛擬帳戶 ====================
+async function loadPaper(){
+  const box = $('paperBox');
+  try {
+    const d = await (await fetch('/api/gold/paper')).json();
+    if (!d.closed && !d.open) {
+      box.innerHTML = '暫時未有虛擬倉。下一個訊號出現時會自動開一張。';
+      return;
+    }
+    const wr = d.win_rate;
+    const col = wr == null ? '#94a3b8' : (wr >= 30 ? '#4ade80' : '#f87171');
+    let h = `<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">`
+      + `<div class="bg-slate-800 rounded p-2"><div class="text-slate-500">已結算</div><div class="text-base font-semibold">${d.closed||0} 筆</div></div>`
+      + `<div class="bg-slate-800 rounded p-2"><div class="text-slate-500">勝率</div><div class="text-base font-semibold" style="color:${col}">${wr==null?'—':wr+'%'}</div></div>`
+      + `<div class="bg-slate-800 rounded p-2"><div class="text-slate-500">每筆期望</div><div class="text-base font-semibold">${d.expectancy_atr==null?'—':d.expectancy_atr+' ATR'}</div></div>`
+      + `<div class="bg-slate-800 rounded p-2"><div class="text-slate-500">持倉中</div><div class="text-base font-semibold">${d.open||0} 筆</div></div>`
+      + `</div>`;
+    const bs = d.by_strategy || {};
+    const keys = Object.keys(bs);
+    if (keys.length) {
+      h += '<table class="w-full text-[11px]"><thead><tr class="text-slate-500">'
+        + '<th class="text-left py-1">策略</th><th class="text-right">筆數</th>'
+        + '<th class="text-right">勝率</th><th class="text-right">累積 ATR</th></tr></thead><tbody>';
+      for (const k of keys) {
+        const x = bs[k];
+        h += `<tr class="border-t border-slate-800"><td class="py-1">${k==='B'?'🅱️ B':'🅰️ A'}</td>`
+          + `<td class="text-right">${x.n}</td><td class="text-right">${x.win_rate}%</td>`
+          + `<td class="text-right" style="color:${x.atr>=0?'#4ade80':'#f87171'}">${x.atr>0?'+':''}${x.atr}</td></tr>`;
+      }
+      h += '</tbody></table>';
+    }
+    if (d.closed && d.closed < 30) {
+      h += `<div class="mt-2 text-amber-400">仲要 ${30-d.closed} 筆才夠 30 筆 — 而家嘅勝率未有統計意義。</div>`;
+    }
+    box.innerHTML = h;
+  } catch(e) { box.textContent = '讀取失敗'; }
+}
+
 // ==================== 交易日誌 ====================
 let jData = {trades: [], stats: {}, follow_options: {}};
 
@@ -558,6 +617,7 @@ async function loadJournal() {
     jStats(d.stats);
     jDrafts(d.drafts || []);
     jList(d.trades);
+    loadPaper();
   } catch (e) { $('jList').textContent = '載入失敗：' + e; }
 }
 
@@ -622,6 +682,7 @@ function jList(ts) {
       <td class="pr-2 text-right">${slip}</td>
       <td class="pr-2 text-right">${jFmt(t.lot)}</td>
       <td class="pr-2 text-right">${jFmt(t.spread_at_entry)}</td>
+      <td class="pr-2 whitespace-nowrap">${t.strategy === 'B' ? '🅱️ B' : '🅰️ A'}</td>
       <td class="pr-2 whitespace-nowrap"${warn}>${t.followed_label || '—'}</td>
       <td class="pr-2 text-right">${jFmt(t.exit_price)}</td>
       <td class="pr-2 text-right">${pnlCell}</td>
@@ -635,7 +696,7 @@ function jList(ts) {
       <th class="text-left py-1 pr-2">開倉</th><th class="text-left pr-2">方向</th>
       <th class="text-right pr-2">訊號價</th><th class="text-right pr-2">實際價</th>
       <th class="text-right pr-2">偏差<span class="text-[9px]">/盎司</span></th><th class="text-right pr-2">手數</th>
-      <th class="text-right pr-2">點差</th><th class="text-left pr-2">跟足</th>
+      <th class="text-right pr-2">點差</th><th class="text-left pr-2">策略</th><th class="text-left pr-2">跟足</th>
       <th class="text-right pr-2">出場</th><th class="text-right pr-2">盈虧</th>
       <th class="text-left">操作</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -661,6 +722,7 @@ function prefillFromSignal() {
   $('jSignalTarget').value = g.target ?? '';
   $('jLot').value = g.lot ?? '';
   $('jFollowed').value = 'yes';
+  $('jStrategy').value = 'A';
   // 點差預設用你上次記錄嘅實際值（比硬編 0.30 準），冇記錄就留空等你填
   const last = (jData.trades || []).find(t => t.spread_at_entry !== null
                                               && t.spread_at_entry !== undefined);
@@ -700,6 +762,7 @@ function editTrade(id) {
   set('jOpenedAt', (t.opened_at || '').slice(0, 16));
   set('jDirection', t.direction);
   set('jFollowed', t.followed);
+  $('jStrategy').value = (t.strategy || 'A');
   set('jSignalEntry', t.signal_entry);
   set('jActualEntry', t.actual_entry);
   set('jLot', t.lot);
@@ -726,6 +789,7 @@ async function saveJournal() {
     opened_at: $('jOpenedAt').value || null,
     direction: $('jDirection').value,
     followed: $('jFollowed').value,
+    strategy: $('jStrategy').value,
     signal_entry: jNum('jSignalEntry'),
     actual_entry: actual,
     lot: jNum('jLot'),

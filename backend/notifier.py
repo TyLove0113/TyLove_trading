@@ -281,6 +281,20 @@ def _other_reasons(reasons) -> list:
             if not r.startswith("EMA20 高於") and not r.startswith("EMA20 低於")]
 
 
+def _strategy_tag(g: dict) -> str:
+    """雙策略標記 —— 2026-10-21 加。
+
+    用戶決定保留現有系統做「A」，另外設計新策略做「B」。
+    兩個系統會並行出訊號，所以每條訊息必須一眼睇得出跟邊個，
+    交易日誌亦要記錄，否則績效數字會混埋一齊、冇法比較。
+    """
+    tag = str(g.get("strategy") or "A").strip().upper()
+    name = g.get("strategy_name") or ("突破" if tag == "A" else "新策略")
+    if tag == "B":
+        return f"🅱️ *策略 B*｜{name}"
+    return f"🅰️ *策略 A*｜{name}"
+
+
 def fmt_gold_signal(g: dict) -> str:
     """黃金訊號通知（正式版：K 線已收盤）。"""
     if not g.get("has_signal"):
@@ -306,6 +320,7 @@ def fmt_gold_signal(g: dict) -> str:
             "入場價位僅供參考")
     lines = [
         f"*【黃金 XAU/USD】{arrow}*",
+        _strategy_tag(g),
         _src,
         f"訊號 K 線 {g['time']}（香港時間）",
         "─" * 18,

@@ -198,6 +198,32 @@ def session_label(t: datetime) -> str:
     return "亞洲盤（最靜）"
 
 
+_NEWS_TIMES = ((20, 30), (21, 30), (2, 0))   # 香港時間：美國數據／FOMC
+
+
+def _news_blackout(t: datetime) -> str:
+    """美國重要數據公布前後 N 分鐘內唔出訊號 —— 2026-10-22 加。
+
+    實測 349 個訊號：公布前後 30 分鐘勝率 25.0%、每筆 -0.15 ATR；
+    其他時段 28.9%、+0.02 ATR。避開之後由「蝕」變成「啱好打和」。
+    呢個係防守型過濾 —— 唔會令策略變賺錢，但會令你少蝕同少滑價。
+    """
+    try:
+        m = int(config.GOLD_NEWS_BLACKOUT_MIN)
+    except Exception:  # noqa: BLE001
+        return ""
+    if m <= 0:
+        return ""
+    hm = t.hour * 60 + t.minute
+    for hh, mm in _NEWS_TIMES:
+        d = abs(hm - (hh * 60 + mm))
+        d = min(d, 1440 - d)
+        if d <= m:
+            return ("美國數據公布時段（%02d:%02d 前後 %d 分鐘），"
+                    "波動大同容易滑價，暫停出訊號" % (hh, mm, m))
+    return ""
+
+
 def _session_ok(t: datetime) -> bool:
     """倫敦 + 紐約活躍時段（香港時間 15:00 – 01:00）。
 
@@ -333,6 +359,11 @@ def evaluate(df: pd.DataFrame = None) -> dict:
         chase_atr = round(gap / atr, 2)
 
     blocked = (_lim > 0 and out["today_trades"] >= _lim) or not out["session_ok"]
+    # 美國數據公布前後唔出訊號（防守型過濾）
+    _nb = _news_blackout(t)
+    if _nb:
+        blocked = True
+        reasons.append("⛔ " + _nb)
     if config.GOLD_TREND_FILTER and trend_conflict:
         if _bias_set:
             # 方案 A：H1 有方向 → 以 H1 為準，15m 趨勢只作提示，唔擋。

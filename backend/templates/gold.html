@@ -309,6 +309,10 @@ const $ = id => document.getElementById(id);
 // ==================== 待確認草稿 ====================
 // 2026-09-30：MT4 自動讀入嘅成交會放喺度等你核對。
 // 你撳「確認」先正式入帳，撳「丟棄」就刪走 —— 系統唔會代你決定。
+// 2026-11-01：按鈕參數改用 cache，唔再用 inline JSON.stringify。
+// 之前 onclick="posEdit(7,"398434",...)" —— JSON 嘅雙引號同 HTML 屬性嘅
+// 雙引號撞，屬性命中第一個 " 就斷咗，JS 語法錯 → 撳落去完全冇反應。
+const POS_CACHE = {};
 async function loadPositions(){
   try {
     const d = await (await fetch('/api/gold/positions')).json();
@@ -322,7 +326,7 @@ async function loadPositions(){
     }
     box.innerHTML = '<div style="margin-bottom:6px"><b>📌 未平倉持倉（'
       + ps.length + ' 張）</b>　<span class="muted">黃金時段每 15 分鐘對價</span></div>'
-      + ps.map(p => '<div class="row" style="padding:6px 0;border-top:1px solid #ffffff14">'
+      + ps.map(p => (POS_CACHE[p.id] = p, '') && '<div class="row" style="padding:6px 0;border-top:1px solid #ffffff14">'
         + '<b>#' + (p.ticket || p.id) + '</b>　'
         + (p.direction === 'long' ? '🟢做多' : '🔴做空') + '　' + p.lot + '手'
         + '<br><span class="muted">入 ' + p.entry + '　止 ' + (p.stop || '—')
@@ -333,10 +337,7 @@ async function loadPositions(){
         + '<button onclick="posClose(' + p.id + ')" '
         + 'style="padding:2px 10px;border-radius:4px;background:#0369a1;color:#fff;font-size:12px">'
         + '✅ 已經平倉</button>'
-        + '<button onclick="posEdit(' + p.id + ',' + JSON.stringify(String(p.entry)) + ','
-        + JSON.stringify(String(p.stop === null || p.stop === undefined ? '' : p.stop)) + ','
-        + JSON.stringify(String(p.target === null || p.target === undefined ? '' : p.target)) + ','
-        + JSON.stringify(String(p.lot === null || p.lot === undefined ? '' : p.lot)) + ')" '
+        + '<button onclick="posEdit(' + p.id + ')" '
         + 'style="padding:2px 10px;border-radius:4px;background:#a16207;color:#fff;font-size:12px">'
         + '✏️ 改數值</button>'
         + '<button onclick="posDel(' + p.id + ')" '
@@ -366,7 +367,13 @@ async function posClose(pid){
   loadJournal();
 }
 
-async function posEdit(pid, entry, stop, target, lot){
+async function posEdit(pid){
+  // 2026-11-01：改為只收 pid，其餘由 POS_CACHE 取 —— 避免 HTML 引號衝突。
+  const _p = POS_CACHE[pid] || {};
+  const entry = _p.entry == null ? '' : String(_p.entry);
+  const stop = _p.stop == null ? '' : String(_p.stop);
+  const target = _p.target == null ? '' : String(_p.target);
+  const lot = _p.lot == null ? '' : String(_p.lot);
   // 2026-10-07：用戶反映 OCR 有時讀歪入場／止蝕／目標，要可以手動改。
   const v = prompt(
     '一次過填（用空格分隔）：\n入場價  止蝕  目標  手數\n\n'

@@ -260,6 +260,37 @@ def _pos_text() -> str:
     return gp.fmt_list()
 
 
+def _journal_open():
+    """交易日誌入面仲未平倉嘅記錄。
+
+    2026-10-30：用戶反映 Telegram 冇得平倉。原因有兩個：
+      ① cmd:close 按鈕嗰條路冇傳 keyboard（文字出咗、按鈕冇）
+      ② /close 只查 gold_positions（持倉表），如果記錄係喺 gold_trades
+         （交易日誌）就完全搵唔到 —— 兩張表係分開嘅。
+    呢個函數做後備：持倉表空嘅時候，改為列出日誌未平倉嘅記錄。
+    """
+    import journal as J
+    try:
+        return [t for t in J.list_trades(limit=60) if t.get("status") == "open"]
+    except Exception:  # noqa: BLE001
+        log.exception("讀取未平倉日誌失敗")
+        return []
+
+
+def _journal_kb(rows):
+    """日誌未平倉記錄 → 每筆一顆按鈕。"""
+    out = []
+    for t in rows:
+        out.append([{
+            "text": "\U0001F4D2 #%s %s %s手 入 %s" % (
+                t["id"],
+                "\U0001F7E2\u505a\u591a" if t.get("direction") == "long"
+                else "\U0001F534\u505a\u7a7a",
+                t.get("lot"), t.get("actual_entry")),
+            "callback_data": "jcl:%s" % t["id"]}])
+    return out
+
+
 def _help_or_close() -> str:
     """平倉揀張（配 _close_kb 按鈕用）。"""
     import gold_positions as gp
@@ -284,6 +315,27 @@ def _ask_pnl(token, chat):
 def _finish_close(token, chat, pid, ex, pnl):
     import gold_positions as gp
     import journal as J
+    # 2026-10-30：日誌（gold_trades）嘅平倉走另一條路 —— 兩張表分開。
+    if (_CLOSE_FLOW.get(str(chat)) or {}).get("kind") == "journal":
+        if ex is None:
+            _send(token, chat,
+                  "\u274C \u65e5\u8a8c\u8a18\u9304\u4e00\u5b9a\u8981\u586b\u5e73\u5009\u50f9\u3002"
+                  "\u6253\u500b\u6578\u5b57\uff0c\u4f8b\u5982 `4118.30`\u3002")
+            return
+        try:
+            ok = J.close_trade(pid, ex, pnl)
+        except Exception:  # noqa: BLE001
+            log.exception("日誌平倉失敗")
+            ok = False
+        _CLOSE_FLOW.pop(str(chat), None)
+        if not ok:
+            _send(token, chat, "\u274C \u5e73\u5009\u5931\u6557\uff0c\u8acb\u4e0a\u7db2\u9801 `/gold` \u8a66\u3002")
+            return
+        msg = "\u2705 *#%s \u5df2\u5e73\u5009*\uff08\u65e5\u8a8c\uff09\n\u5e73\u5009\u50f9 %s\n" % (pid, ex)
+        if pnl is not None:
+            msg += "\u76c8\u8667 %s \u7f8e\u5143\n" % pnl
+        _send(token, chat, msg)
+        return
     with gp._conn() as c:
         row = c.execute("SELECT ticket FROM gold_positions WHERE id=?", (pid,)).fetchone()
     if not row:
@@ -326,7 +378,23 @@ def _handle(token: str, my_chat, u: dict) -> None:
                 _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
                 return
             if data == "cmd:close":
-                _send(token, my_chat, _help_or_close())
+                # 2026-10-30 修：之前呢條路冇傳 keyboard，所以撳「/close」按鈕
+                # 只會出文字、冇任何按鈕（用戶截圖反映）。
+                import gold_positions as gp
+                op = gp.all_open()
+                if op:
+                    _send(token, my_chat, _help_or_close(), keyboard=_close_kb(op))
+                else:
+                    jop = _journal_open()
+                    if jop:
+                        _send(token, my_chat,
+                              "\U0001F4D2 *\u65e5\u8a8c\u5165\u9762\u672a\u5e73\u5009\u7684\u8a18\u9304*\n\n"
+                              "\u4e0b\u9762\u6309\u4e00\u4e0b\u5c31\u5f97\uff08\u6309\u5f8c\u6703\u554f\u4f60\u5e73\u5009\u50f9\uff09\u3002",
+                              keyboard=_journal_kb(jop))
+                    else:
+                        _send(token, my_chat,
+                              "\U0001F4ED \u800c\u5bb6\u5187\u672a\u5e73\u5009\u8a18\u9304\u3002\n\n"
+                              "\u60f3\u8a18\u4e00\u7b46\u65b0\u4ea4\u6613\uff0c\u4e0a\u7db2\u9801 `/gold` \u6216\u50b3 MT4 \u622a\u5716\u3002")
                 _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
                 return
             if data == "cmd:note":
@@ -339,6 +407,19 @@ def _handle(token: str, my_chat, u: dict) -> None:
                       "\u60f3\u9023\u622a\u5716\u4e00\u9f4a\u8a18\uff0c\u4e0a\u7db2\u9801 /gold\u3002\n"
                       "\u800c\u5bb6\u7e3d\u5171 %d \u7bc7\u3002" % len(N.all_notes()),
                       keyboard=_help_kb())
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
+                return
+            if data.startswith("jcl:"):
+                try:
+                    jid = int(data.split(":", 1)[1])
+                except ValueError:
+                    jid = None
+                if jid is not None:
+                    _CLOSE_FLOW[str(my_chat)] = {
+                        "pid": jid, "kind": "journal", "step": "exit", "exit": None}
+                    _send(token, my_chat,
+                          "\U0001F4B0 *#%s* \u5e73\u5009\u50f9\u4fc2\u5e7e\u591a\uff1f\n\n"
+                          "\u76f4\u63a5\u6253\u500b\u6578\u5b57\uff08\u4f8b\u5982 `4118.30`\uff09\u3002" % jid)
                 _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
                 return
             if data.startswith("cl:"):
@@ -435,7 +516,16 @@ def _handle(token: str, my_chat, u: dict) -> None:
         if len(parts) < 2 or not parts[1].lstrip("#").isdigit():
             op = gp.all_open()
             if not op:
-                _send(token, my_chat, "\U0001f4ed \u800c\u5bb6\u5187\u672a\u5e73\u5009\u6301\u5009\u3002")
+                jop = _journal_open()
+                if jop:
+                    _send(token, my_chat,
+                          "\U0001F4D2 *\u65e5\u8a8c\u5165\u9762\u672a\u5e73\u5009\u7684\u8a18\u9304*\n\n"
+                          "\u4e0b\u9762\u6309\u4e00\u4e0b\u5c31\u5f97\uff08\u6309\u5f8c\u6703\u554f\u4f60\u5e73\u5009\u50f9\uff09\u3002",
+                          keyboard=_journal_kb(jop))
+                    return
+                _send(token, my_chat,
+                      "\U0001F4ED \u800c\u5bb6\u5187\u672a\u5e73\u5009\u8a18\u9304\u3002\n\n"
+                      "\u60f3\u8a18\u4e00\u7b46\u65b0\u4ea4\u6613\uff0c\u4e0a\u7db2\u9801 `/gold` \u6216\u50b3 MT4 \u622a\u5716\u3002")
                 return
             # 2026-10-07：改用泡泡按鈕，唔使打編號
             _send(token, my_chat, _help_or_close(), keyboard=_close_kb(op))

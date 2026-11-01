@@ -56,6 +56,46 @@ def init_db() -> None:
             )""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_gp_open "
                   "ON gold_positions(status)")
+        # 2026-11-01：自動修正以前 OCR 漏小數點入錯嘅價格
+        # （例如 398434 應該係 3984.34）。只改明顯唔合理嘅值。
+        try:
+            rows = c.execute("SELECT id, entry, stop, target FROM gold_positions"
+                             ).fetchall()
+            for r in rows:
+                e, st, tg = r[1], r[2], r[3]
+                ne = _fix_price(e) if e is not None else None
+                ns = _fix_price(st) if st is not None else None
+                nt = _fix_price(tg) if tg is not None else None
+                if (ne, ns, nt) != (e, st, tg):
+                    c.execute("UPDATE gold_positions SET entry=?, stop=?, target=? "
+                              "WHERE id=?", (ne, ns, nt, r[0]))
+                    log.info("已修正持倉 #%s 價格 %s/%s/%s → %s/%s/%s",
+                             r[0], e, st, tg, ne, ns, nt)
+        except Exception:  # noqa: BLE001
+            log.exception("修正舊價格時出錯")
+
+
+def _fix_price(v, ref=None):
+    """OCR 有時漏咗小數點（3984.34 讀成 398434）—— 2026-11-01 加。
+
+    黃金歷史上大約喺 250–5000 之間（你 22 年數據 384 → 4300）。
+    如果讀出嚟嘅價超出合理範圍，就試除 10／100／1000，
+    揀第一個落返 200–20000 嘅值。冇改動就回傳原本。
+    """
+    try:
+        f = float(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return v
+    if f <= 0:
+        return v
+    lo, hi = 200.0, 20000.0
+    if lo <= f <= hi:
+        return v                      # 合理，唔改
+    for d in (10, 100, 1000, 10000):
+        c = f / d
+        if lo <= c <= hi:
+            return round(c, 2)
+    return v
 
 
 def save_from_ocr(rows: list, source: str = "mt4") -> dict:
@@ -66,6 +106,15 @@ def save_from_ocr(rows: list, source: str = "mt4") -> dict:
     """
     init_db()
     added = updated = 0
+    # 2026-11-01：先修正 OCR 漏小數點嘅價格，再做下面的比對／寫入。
+    _fixed = 0
+    for r in rows:
+        for _k in ("actual_entry", "actual_stop", "signal_target_hint"):
+            _old = r.get(_k)
+            _new = _fix_price(_old)
+            if _new != _old and _old is not None:
+                r[_k] = _new
+                _fixed += 1
     for r in rows:
         entry = r.get("actual_entry")
         if not entry:

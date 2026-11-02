@@ -33,6 +33,8 @@ extern string FEED_TOKEN       = "";
 
 extern int    TickSeconds      = 5;    // 每幾秒推一次即時報價
 extern int    BarMinutes       = 15;   // K 線週期（分鐘）
+extern string PushFrames       = "";   // 多時框：例 "M1,M5,M15,H1,H4"；留空 = 只用 BarMinutes
+extern int    M1Bars           = 2000; // M1 開頭推幾多支（M1 變化快，要多啲）
 extern int    BarCountFull     = 300;  // 開頭推幾多支歷史 K 線
 extern int    BarCountQuick    = 6;    // 之後每次補推幾多支
 extern int    PushBarsEveryMin = 5;    // 每幾分鐘補推一次 K 線
@@ -169,29 +171,68 @@ void SendTick() {
     if (Post("/api/gold/tick", body)) g_okTicks++;
 }
 
-void SendBars(int n) {
-    int total = iBars(g_sym, g_tf);
+int TFMinutes(int tf) {
+    if (tf == PERIOD_M1)  return 1;
+    if (tf == PERIOD_M5)  return 5;
+    if (tf == PERIOD_M15) return 15;
+    if (tf == PERIOD_M30) return 30;
+    if (tf == PERIOD_H1)  return 60;
+    if (tf == PERIOD_H4)  return 240;
+    if (tf == PERIOD_D1)  return 1440;
+    return 15;
+}
+
+// 2026-11-01：支援一次推多個時框 —— 用戶要求 M15 方向之外，
+// 同時收 M1/M5/H1/H4 做 cross-check。後端 feed_bars 主鍵已含
+// (symbol, interval, ts)，所以多時框並存冇問題。
+void SendBarsTF(int tf, int n) {
+    int mins  = TFMinutes(tf);
+    int total = iBars(g_sym, tf);
     if (total < 20) { Print("⚠️ 歷史 K 線不足（", total, "）"); return; }
     if (n > total - 1) n = total - 1;
     string body = StringFormat(
-        "{\"symbol\":\"%s\",\"interval\":%d,\"source\":\"mt4\",\"bars\":[", g_sym, BarMinutes);
+        "{\"symbol\":\"%s\",\"interval\":%d,\"source\":\"mt4\",\"bars\":[", g_sym, mins);
     for (int i = n; i >= 0; i--) {
         if (i != n) body += ",";
         body += StringFormat("{\"t\":%d,\"o\":%s,\"h\":%s,\"l\":%s,\"c\":%s}",
-            (int)iTime(g_sym, g_tf, i) - g_tzOffset,
-            D2S(iOpen(g_sym,g_tf,i)), D2S(iHigh(g_sym,g_tf,i)),
-            D2S(iLow(g_sym,g_tf,i)),  D2S(iClose(g_sym,g_tf,i)));
+            (int)iTime(g_sym, tf, i) - g_tzOffset,
+            D2S(iOpen(g_sym,tf,i)), D2S(iHigh(g_sym,tf,i)),
+            D2S(iLow(g_sym,tf,i)),  D2S(iClose(g_sym,tf,i)));
     }
     body += "]}";
     if (Post("/api/gold/bars", body)) g_okBars++;
 }
+
+// 逐個時框推送；PushFrames 留空就只推 BarMinutes（舊行為）。
+void PushAllFrames(int n) {
+    string spec = PushFrames;
+    if (StringLen(spec) == 0) { SendBarsTF(g_tf, n); return; }
+    string parts[];
+    int k = StringSplit(spec, ',', parts);
+    for (int i = 0; i < k; i++) {
+        string t = parts[i];
+        StringTrimLeft(t); StringTrimRight(t);
+        StringToUpper(t);
+        int tf = 0, cnt = n;
+        if (t == "M1")       { tf = PERIOD_M1;  cnt = M1Bars; }
+        else if (t == "M5")  tf = PERIOD_M5;
+        else if (t == "M15") tf = PERIOD_M15;
+        else if (t == "M30") tf = PERIOD_M30;
+        else if (t == "H1")  tf = PERIOD_H1;
+        else if (t == "H4")  tf = PERIOD_H4;
+        else if (t == "D1")  tf = PERIOD_D1;
+        if (tf == 0) continue;
+        SendBarsTF(tf, cnt);
+    }
+}
+
 void ShowStatus() {
     string conn = (g_quoteLag > 180)
                   ? "⚠️ 券商報價停滯 " + IntegerToString(g_quoteLag) + " 秒"
                   : "✅ 券商報價正常";
     Comment("🟦 TyLove 報價推送  ", EA_VERSION, "\n",
             "══════════════════\n",
-            g_sym, "　M", BarMinutes, "\n",
+            g_sym, "　", (StringLen(PushFrames) > 0 ? PushFrames : "M" + IntegerToString(BarMinutes)), "\n",
             "報價成功 ", g_okTicks, " 次\n",
             "K線成功 ", g_okBars, " 次　失敗 ", g_fail, " 次\n",
             "最後 K 線：", TimeToString(g_lastBarPush, TIME_SECONDS), "\n",
@@ -237,6 +278,8 @@ int OnInit() {
     return (INIT_SUCCEEDED);
 }
 
+bool PushFramesInitDone = false;
+
 void OnTimer() {
     // 監測券商報價有冇停：TimeCurrent() 只會喺收到新報價時前進
     if (TimeCurrent() != g_lastServerTime) {
@@ -253,7 +296,8 @@ void OnTimer() {
     //    網站收唔到新 K 線變紅，但 EA 照顯示成功。呢個就係 v2.0 修嘅 bug。
     if (TimeLocal() - g_lastBarPush >= PushBarsEveryMin * 60) {
         g_lastBarPush = TimeLocal();
-        SendBars(BarCountQuick);
+        PushAllFrames(PushFramesInitDone ? BarCountQuick : BarCountFull);
+        PushFramesInitDone = true;
     }
 
     // 2026-09-30：定時檢查有無新成交（用手機落單都會出現喺呢度）。

@@ -224,6 +224,44 @@ def _news_blackout(t: datetime) -> str:
     return ""
 
 
+_MTF_SPEC = (("M1", 1), ("M5", 5), ("M15", 15), ("H1", 60), ("H4", 240))
+
+
+def mtf_context() -> dict:
+    """多時框快照 —— 2026-11-02 加（用戶要求收集／分析 M1）。
+
+    讀 EA 推上嚟嘅 M1/M5/M15/H1/H4，計每個時框方向同短期動能。
+    **純顯示同記錄，唔參與入場決策** —— 因為實測（22.4 年）顯示
+    加多時框過濾只改善 4.6 個百分點，而且仍然低於 50% 順向率。
+    用戶可以自己睇住判斷，但系統唔會偷偷改策略。
+    """
+    out = {}
+    try:
+        import feed
+    except Exception:  # noqa: BLE001
+        return out
+    for label, mins in _MTF_SPEC:
+        try:
+            df = feed.bars(mins, 300)
+            if df is None or len(df) < 30:
+                continue
+            c = df["Close"]
+            n5 = min(5, len(c) - 1)
+            mom = float(c.iloc[-1]) - float(c.iloc[-1 - n5])
+            e20 = float(c.ewm(span=20, adjust=False).mean().iloc[-1])
+            e50 = float(c.ewm(span=50, adjust=False).mean().iloc[-1])
+            out[label] = {
+                "dir": "up" if e20 >= e50 else "dn",
+                "mom": round(mom, 2),
+                "bars": int(len(df)),
+                "age": round((datetime.now(ZoneInfo(config.HK_TZ))
+                              - df.index[-1]).total_seconds() / 60, 1),
+            }
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _session_ok(t: datetime) -> bool:
     """倫敦 + 紐約活躍時段（香港時間 15:00 – 01:00）。
 
@@ -592,6 +630,8 @@ def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
             "daily_bias": _b,
             # 2026-10-21：雙策略標記。A = 現有突破系統；B = 未來新策略。
             "strategy": "A", "strategy_name": "突破",
+            # 2026-11-02：多時框快照（M1/M5/M15/H1/H4），純顯示唔改決策
+            "mtf": mtf_context(),
             "spot_offset": config.GOLD_SPOT_OFFSET, "data_age_min": 0.0}
     if push:
         try:

@@ -4,6 +4,7 @@
 //+------------------------------------------------------------------+
 //  版本記錄（想確認有冇更新，睇圖表左上角會唔會寫 v2.1）
 //
+//  v2.2  2026-11-02  加多時框（PushFrames）；用自訂 SplitString 取代 MQL4 冇嘅 StringSplit
 //  v2.1  2026-09-29  ⭐ 修好「EA 話成功、但網站收唔到」嘅元兇
 //                     - API_BASE 少咗 https:// 會令 WebRequest 一定失敗。
 //                       新版會自動補返，填漏都用得。
@@ -21,10 +22,10 @@
 //  v1.0  2026-09-23  第一版
 //+------------------------------------------------------------------+
 #property copyright "TyLove"
-#property version   "2.20"
+#property version   "2.22"
 #property strict
 
-#define EA_VERSION "v2.2"
+#define EA_VERSION "v2.3"
 
 //================= 你只需要改呢兩行 =================
 extern string API_BASE         = "https://xxxx.up.railway.app";
@@ -33,9 +34,9 @@ extern string FEED_TOKEN       = "";
 
 extern int    TickSeconds      = 5;    // 每幾秒推一次即時報價
 extern int    BarMinutes       = 15;   // K 線週期（分鐘）
-extern string PushFrames       = "";   // 多時框：例 "M1,M5,M15,H1,H4"；留空 = 只用 BarMinutes
+extern string PushFrames       = "M15,H1,H4";  // 多時框（2026-11-02 改預設）；留空 = 只用 BarMinutes
 extern int    M1Bars           = 2000; // M1 開頭推幾多支（M1 變化快，要多啲）
-extern int    BarCountFull     = 300;  // 開頭推幾多支歷史 K 線
+extern int    BarCountFull     = 2000; // 開頭推幾多支歷史 K 線（2026-11-02：300 太少，改 2000）
 extern int    BarCountQuick    = 6;    // 之後每次補推幾多支
 extern int    PushBarsEveryMin = 5;    // 每幾分鐘補推一次 K 線
 extern string SymbolName       = "";   // 留空 = 用圖表本身嘅品種
@@ -204,11 +205,32 @@ void SendBarsTF(int tf, int n) {
 }
 
 // 逐個時框推送；PushFrames 留空就只推 BarMinutes（舊行為）。
+// MQL4 冇 StringSplit（MQL5 才有）—— 2026-11-02 加。
+// 原本直接叫 StringSplit 會編譯失敗，令 .ex4 生成唔到，
+// Visual Studio 見到檔案但撳唔到「加入圖表」。
+int SplitString(string s, string sep, string &out[]) {
+    int n = 0, start = 0;
+    int len = StringLen(s), slen = StringLen(sep);
+    for (int i = 0; i <= len; i++) {
+        bool atEnd  = (i == len);
+        bool isSep  = (!atEnd && StringSubstr(s, i, slen) == sep);
+        if (atEnd || isSep) {
+            if (i > start) {
+                ArrayResize(out, n + 1);
+                out[n] = StringSubstr(s, start, i - start);
+                n++;
+            }
+            start = i + slen;
+        }
+    }
+    return n;
+}
+
 void PushAllFrames(int n) {
     string spec = PushFrames;
     if (StringLen(spec) == 0) { SendBarsTF(g_tf, n); return; }
     string parts[];
-    int k = StringSplit(spec, ',', parts);
+    int k = SplitString(spec, ",", parts);
     for (int i = 0; i < k; i++) {
         string t = parts[i];
         StringTrimLeft(t); StringTrimRight(t);
@@ -269,7 +291,7 @@ int OnInit() {
     Print("   ", g_base);
     Print("===========================================================");
 
-    SendBars(BarCountFull);
+    SendBarsTF(g_tf, BarCountFull);   // 2026-11-02 修：舊名 SendBars 已改名做 SendBarsTF
     g_lastBarPush    = TimeLocal();
     g_lastQuoteAt    = TimeLocal();
     g_lastServerTime = TimeCurrent();

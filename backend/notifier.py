@@ -295,6 +295,25 @@ def _strategy_tag(g: dict) -> str:
     return f"🅰️ *策略 A*｜{name}"
 
 
+def _mtf_line(g: dict) -> str:
+    """多時框一覽 —— 2026-11-02 加（用戶要求分析 M1）。
+
+    純參考，唔影響訊號。實測 22.4 年顯示加時框過濾只改善 4.6 個百分點，
+    所以系統唔會自動用佢決策，交由你判斷。
+    """
+    m = g.get("mtf") or {}
+    if not m:
+        return ""
+    parts = []
+    for k in ("M1", "M5", "M15", "H1", "H4"):
+        v = m.get(k)
+        if not v:
+            continue
+        arrow = "↑" if v.get("dir") == "up" else "↓"
+        parts.append("%s%s%+.1f" % (k, arrow, float(v.get("mom") or 0)))
+    return ("📊 *多時框動能*：" + "　".join(parts)) if parts else ""
+
+
 def fmt_gold_signal(g: dict) -> str:
     """黃金訊號通知（正式版：K 線已收盤）。"""
     if not g.get("has_signal"):
@@ -371,6 +390,7 @@ def fmt_gold_signal(g: dict) -> str:
         "",
         _bias_line(g.get("daily_bias")),
         _trend_line(g.get("reasons", [])),
+        _mtf_line(g),
         "理由：" + "；".join(_other_reasons(g.get("reasons", []))[:3]),
         "",
         f"⚠️ {g.get('disclaimer','')}",

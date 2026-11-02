@@ -414,6 +414,12 @@ def gold_feed_status():
     import feed
     st = feed.status()
     st["archive"] = feed.archive()
+    # 2026-11-02：EA 推送失敗（用戶見到 ❌ 9 次）最常見係 token 唔匹配。
+    # 呢度明確講出「有冇設 token」，唔會洩露 token 值本身。
+    st["token_set"] = bool(config.GOLD_FEED_TOKEN)
+    st["token_hint"] = ("已設 GOLD_FEED_TOKEN —— EA 嘅 FEED_TOKEN 必須完全一樣"
+                        if config.GOLD_FEED_TOKEN
+                        else "未設 GOLD_FEED_TOKEN —— EA 嘅 FEED_TOKEN 請留空")
     return jsonify(st)
 
 

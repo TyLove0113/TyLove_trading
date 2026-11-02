@@ -166,10 +166,26 @@ def stats() -> dict:
     for d in by.values():
         d["win_rate"] = round(100 * d["win"] / d["n"], 1)
         d["atr"] = round(d["atr"], 2)
+    # 2026-11-02：加明細 + 時間分佈 —— 用戶質疑「30 筆 83.3%」係否造假。
+    # 老實講：數字係真，但 30 筆若集中喺同一段單邊行情（例如金價連跌），
+    # 做空全部贏 —— 統計上冇意義。所以同時列出方向同日期範圍。
+    detail = [{"ts": r["signal_ts"], "dir": r["direction"],
+               "entry": r["entry"], "stop": r["stop"], "target": r["target"],
+               "status": r["status"], "pnl_atr": round(r["pnl_atr"] or 0, 2)}
+              for r in closed[-40:]]
+    days = sorted({str(r["signal_ts"])[:10] for r in closed})
+    dirs = {}
+    for r in closed:
+        dirs[r["direction"]] = dirs.get(r["direction"], 0) + 1
     return {"open": len(rows) - n, "closed": n,
             "win_rate": round(100 * w / n, 1),
             "expectancy_atr": round(tot / n, 3),
-            "total_atr": round(tot, 2), "by_strategy": by}
+            "total_atr": round(tot, 2), "by_strategy": by,
+            "first_day": days[0] if days else None,
+            "last_day": days[-1] if days else None,
+            "span_days": len(days),
+            "by_direction": dirs,
+            "recent": detail}
 
 
 if __name__ == "__main__":

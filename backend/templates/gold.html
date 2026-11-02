@@ -326,7 +326,10 @@ async function loadPositions(){
     }
     box.innerHTML = '<div style="margin-bottom:6px"><b>📌 未平倉持倉（'
       + ps.length + ' 張）</b>　<span class="muted">黃金時段每 15 分鐘對價</span></div>'
-      + ps.map(p => (POS_CACHE[p.id] = p, '') && '<div class="row" style="padding:6px 0;border-top:1px solid #ffffff14">'
+      // 2026-11-02 修：原本 (POS_CACHE[p.id]=p, '') && '...' —— 逗號運算符回傳 ''
+      // 空字串係 falsy，所以 && 之後嘅 HTML 永遠唔會出現（標題顯示「1 張」但下面空白）。
+      // 改為回傳 true。
+      + ps.map(p => (POS_CACHE[p.id] = p, true) && '<div class="row" style="padding:6px 0;border-top:1px solid #ffffff14">'
         + '<b>#' + (p.ticket || p.id) + '</b>　'
         + (p.direction === 'long' ? '🟢做多' : '🔴做空') + '　' + p.lot + '手'
         + '<br><span class="muted">入 ' + p.entry + '　止 ' + (p.stop || '—')

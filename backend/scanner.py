@@ -92,14 +92,25 @@ def scan(watchlist: list[str] | None = None, push_summary: bool = True,
     watchlist = watchlist or WATCHLIST
     bench = df_mod.fetch_benchmark()
 
+    # 2026-11-02：改並行分析。原本逐隻串行，12 隻都仲可以，
+    # 但用戶要求擴大股票池（12 → 66 隻），串行會令掃描由約 1 分鐘變 5–6 分鐘，
+    # 撞到下一次掃描或者 Telegram 逾時。用 8 條線程並行，順序仍由下面統一處理。
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     results, signals, vetoed, filtered = [], [], [], []
-    for symbol in watchlist:
-        try:
-            r = analyse_one(symbol, bench)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("分析 %s 失敗", symbol)
-            notifier.push(notifier.fmt_error(f"分析 {symbol}", str(exc)))
-            continue
+    _rows = [None] * len(watchlist)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = {pool.submit(analyse_one, sym, bench): i
+                for i, sym in enumerate(watchlist)}
+        for fut in as_completed(futs):
+            i = futs[fut]
+            try:
+                _rows[i] = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                log.exception("分析 %s 失敗", watchlist[i])
+                notifier.push(notifier.fmt_error(f"分析 {watchlist[i]}", str(exc)))
+
+    # 保持原本次序（觀察名單順序），令輸出穩定、可比較
+    for r in _rows:
         if not r:
             continue
         results.append(r)

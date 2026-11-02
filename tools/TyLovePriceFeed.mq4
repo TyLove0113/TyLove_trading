@@ -34,7 +34,7 @@ int MessageBoxW(int hWnd, string text, string caption, int type);
 #define MB_ICONQUESTION 32
 #define IDYES           6
 
-#define EA_VERSION "v2.4"
+#define EA_VERSION "v2.5"
 
 //================= 你只需要改呢兩行 =================
 extern string API_BASE         = "https://xxxx.up.railway.app";
@@ -330,6 +330,10 @@ void DoTrade(int sid, string dir, double entry, double stop, double target, doub
           " SL=", DoubleToString(stop, g_digits),
           " TP=", DoubleToString(target, g_digits));
     Alert("TyLove 已落單：", dir, " ", DoubleToString(use, 2), " 手");
+    // 2026-11-02：通知後端「已執行」，令同一張訊號唔會再落第二次
+    Post("/api/gold/signal/executed",
+         StringFormat("{\"id\":%d,\"ticket\":%d,\"price\":%s}",
+                      sid, t, DoubleToString(px, g_digits)));
 }
 
 void CheckPending() {
@@ -337,8 +341,11 @@ void CheckPending() {
     if (TimeLocal() - g_lastAutoCheck < AutoEveryMin * 60) return;
     g_lastAutoCheck = TimeLocal();
 
+    // 2026-11-02：改為查「Telegram 已批准」嘅訊號。
+    // 你喺手機撳「✅ 是」→ 後端標記 approved → EA 一分鐘內落單。
+    // 唔撳 = 永遠唔會落單（呢個係設計核心，唔係漏洞）。
     string js;
-    if (!Get("/api/gold/signal/pending?max_age=" + IntegerToString(AutoMaxAgeMin), js))
+    if (!Get("/api/gold/signal/approved?max_age=" + IntegerToString(AutoMaxAgeMin), js))
         return;
 
     int p = StringFind(js, "[{");
@@ -368,6 +375,9 @@ void CheckPending() {
             DoubleToString(entry, g_digits), DoubleToString(stop, g_digits),
             DoubleToString(target, g_digits), DoubleToString(MathMin(lot, MaxAutoLot), 2));
 
+        // 2026-11-02：批准權已搬去 Telegram（手機一撳即落單）。
+        // 呢度只做安全檢查，唔再彈窗 —— 因為彈窗要你坐喺電腦前面，
+        // 就失去「隨時落單」嘅意義。ConfirmEach=false 時仍可保留彈窗做後備。
         if (ConfirmEach) {
             int r = MessageBoxW(0, msg, "TyLove 訊號確認", MB_YESNO | MB_ICONQUESTION);
             if (r != IDYES) {
@@ -375,8 +385,6 @@ void CheckPending() {
                 g_lastDoneId = sid;
                 continue;
             }
-        } else {
-            Print("自動落單（未確認模式）：", msg);
         }
         DoTrade(sid, dir, entry, stop, target, lot);
     }

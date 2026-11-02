@@ -435,6 +435,28 @@ def _handle(token: str, my_chat, u: dict) -> None:
                       keyboard=_help_kb())
                 _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
                 return
+            if data.startswith("sig:"):
+                # 2026-11-02：半自動落單批准 —— sig:ok:<id> / sig:no:<id>
+                parts = data.split(":")
+                if len(parts) == 3:
+                    try:
+                        sid = int(parts[2])
+                    except ValueError:
+                        sid = None
+                    if sid is not None:
+                        import gold as _g
+                        if parts[1] == "ok":
+                            ok = _g.approve_signal(sid, True)
+                            _send(token, my_chat,
+                                  ("✅ *已批准訊號 #%d*\n\n"
+                                   "MT4 會喺一分鐘內自動落單（只限 demo）。\n"
+                                   "落單後會再有通知。" % sid) if ok
+                                  else "⚠️ 訊號 #%d 已經批過或者唔存在。" % sid)
+                        else:
+                            _g.approve_signal(sid, False)
+                            _send(token, my_chat, "❌ 訊號 #%d 唔做。" % sid)
+                _api(token, "answerCallbackQuery", callback_query_id=cq.get("id"))
+                return
             if data.startswith("jcl:"):
                 try:
                     jid = int(data.split(":", 1)[1])

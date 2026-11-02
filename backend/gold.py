@@ -50,9 +50,16 @@ def init_db():
                 price REAL, direction TEXT,
                 entry REAL, stop REAL, target REAL,
                 atr REAL, lot REAL, risk_usd REAL,
-                reasons TEXT
+                reasons TEXT,
+                approved_at TEXT,
+                executed_at TEXT
             )""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_gold_ts ON gold_signals(ts)")
+        # 2026-11-02：Telegram 批准落單 —— 舊 DB 補欄位
+        cols = {r[1] for r in c.execute("PRAGMA table_info(gold_signals)")}
+        for col in ("approved_at", "executed_at"):
+            if col not in cols:
+                c.execute(f"ALTER TABLE gold_signals ADD COLUMN {col} TEXT")
 
 
 def _store(g: dict):
@@ -644,6 +651,12 @@ def early_alert(push: bool = True, df: pd.DataFrame = None) -> dict:
             # 2026-11-02：多時框快照（M1/M5/M15/H1/H4），純顯示唔改決策
             "mtf": mtf_context(),
             "spot_offset": config.GOLD_SPOT_OFFSET, "data_age_min": 0.0}
+    # 2026-11-02：純記錄（唔推送、唔落單）—— 累積真假突破樣本
+    try:
+        import gold_breaks
+        gold_breaks.record(info)
+    except Exception:  # noqa: BLE001
+        log.debug("假突破記錄失敗（唔阻預警）", exc_info=True)
     if push:
         try:
             import notifier
@@ -681,7 +694,29 @@ def scan(push: bool = True) -> dict:
         if push:
             try:
                 import notifier
-                notifier.push(notifier.fmt_gold_signal(g), channel="gold")
+                # 2026-11-02：帶「撳是落單」按鈕（半自動）
+                # 用戶撳「是」→ approved → EA 輪詢到就落單。
+                # 唔撳 = 永遠唔會落單，呢個係安全設計。
+                _sid = _last_signal_id()
+                _kb = None
+                if _sid:
+                    _kb = [[
+                        {"text": "✅ 撳是落單（demo）",
+                         "callback_data": "sig:ok:%d" % _sid},
+                        {"text": "❌ 唔做",
+                         "callback_data": "sig:no:%d" % _sid},
+                    ]]
+                # 先發圖（M15 + M1），再發文字 + 按鈕 —— 圖喺上面，按鈕喺最底易撳
+                try:
+                    _pngs = _signal_charts()
+                    if _pngs:
+                        notifier.push_photos(
+                            _pngs, caption="📊 *訊號圖表*：第 1 張 M15、第 2 張 M1",
+                            channel="gold")
+                except Exception:  # noqa: BLE001
+                    log.exception("訊號附圖失敗（唔阻訊號）")
+                notifier.push(notifier.fmt_gold_signal(g), channel="gold",
+                              keyboard=_kb)
             except Exception:  # noqa: BLE001
                 log.exception("黃金 Telegram 推送失敗")
     log.info("黃金分析：%s｜現價 %s｜%s", g.get("state"), g.get("price"), g.get("time"))
@@ -692,3 +727,104 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     import json
     print(json.dumps(scan(push=False), ensure_ascii=False, indent=2))
+
+
+def _signal_charts(bars: int = 60) -> list:
+    """訊號附圖：M15 先、M1 後 —— 2026-11-02 加。
+
+    用戶實測發現「有機會係反方向」，所以想睇實際走勢再決定撳唔撳落單。
+    數據優先用 EA 推上嚟嘅券商報價（feed），冇就用 yfinance。
+    任何一步失敗都回傳空 list，唔會阻住訊號本身。
+    """
+    out = []
+    try:
+        import charts
+    except Exception:  # noqa: BLE001
+        log.warning("charts 模組載入失敗（可能冇 matplotlib）")
+        return out
+    for mins in (15, 1):
+        try:
+            df = None
+            try:
+                import feed
+                df = feed.bars(mins, bars + 60)
+            except Exception:  # noqa: BLE001
+                df = None
+            if df is None or len(df) < 20:
+                per = "7d" if mins == 1 else "60d"
+                iv = "%dm" % mins
+                raw = yf.download("GC=F", period=per, interval=iv,
+                                  progress=False, auto_adjust=False)
+                if getattr(raw.columns, "nlevels", 1) > 1:
+                    raw.columns = [c[0] for c in raw.columns]
+                if len(raw) >= 20:
+                    df = raw
+            if df is not None and len(df) >= 20:
+                png = charts.render(df, mins, bars)
+                if png:
+                    out.append(png)
+        except Exception:  # noqa: BLE001
+            log.debug("畫 M%d 圖失敗", mins, exc_info=True)
+    return out
+
+
+def _last_signal_id():
+    """最新一筆訊號嘅 id —— 用嚟做 Telegram 按鈕嘅 callback_data。"""
+    try:
+        init_db()
+        with _conn() as c:
+            r = c.execute("SELECT id FROM gold_signals ORDER BY id DESC LIMIT 1"
+                          ).fetchone()
+        return r[0] if r else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def approve_signal(sid: int, ok: bool = True) -> bool:
+    """Telegram 撳「撳是落單」→ 標記批准（2026-11-02 加）。
+
+    EA 之後輪詢 /api/gold/signal/approved 見到就落單。
+    用戶唔撳，EA 永遠唔會落單 —— 呢個係安全設計。
+    """
+    init_db()
+    with _conn() as c:
+        col = "approved_at" if ok else "executed_at"
+        n = c.execute("UPDATE gold_signals SET %s=? "
+                      "WHERE id=? AND executed_at IS NULL" % col,
+                      (datetime.now(ZoneInfo(config.HK_TZ)).strftime("%Y-%m-%d %H:%M:%S"),
+                       sid)).rowcount
+        return n > 0
+
+
+def approved_signals(max_age_min: int = 30) -> list:
+    """已批准但未執行嘅訊號 —— 畀 EA 輪詢。"""
+    init_db()
+    with _conn() as c:
+        rows = c.execute("SELECT * FROM gold_signals "
+                         "WHERE approved_at IS NOT NULL AND executed_at IS NULL "
+                         "ORDER BY id ASC LIMIT 5").fetchall()
+    now = datetime.now(ZoneInfo(config.HK_TZ))
+    out = []
+    for r in rows:
+        try:
+            t = datetime.strptime(str(r["ts"])[:16], "%Y-%m-%d %H:%M").replace(
+                tzinfo=ZoneInfo(config.HK_TZ))
+            age = (now - t).total_seconds() / 60
+        except Exception:  # noqa: BLE001
+            age = 0
+        if max_age_min and age > max_age_min:
+            continue
+        out.append({"id": r["id"], "ts": r["ts"], "direction": r["direction"],
+                    "entry": r["entry"], "stop": r["stop"], "target": r["target"],
+                    "lot": r["lot"], "age_min": round(age, 1)})
+    return out
+
+
+def mark_executed(sid: int) -> bool:
+    """EA 落單成功 → 標記已執行，唔會再落。"""
+    init_db()
+    with _conn() as c:
+        n = c.execute("UPDATE gold_signals SET executed_at=? WHERE id=?",
+                      (datetime.now(ZoneInfo(config.HK_TZ)).strftime("%Y-%m-%d %H:%M:%S"),
+                       sid)).rowcount
+        return n > 0

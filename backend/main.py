@@ -162,6 +162,9 @@ def job_gold_scan():
     try:
         import gold_paper
         gold_paper.settle()
+        # 2026-11-02：假突破結算（純記錄）
+        import gold_breaks
+        gold_breaks.settle()
     except Exception:  # noqa: BLE001
         log.exception("虛擬倉結算失敗")
 
@@ -244,6 +247,7 @@ def scheduler_loop():
     fired = set()
     last_monitor = 0.0
     last_gold = 0.0
+    last_paper = 0.0
 
     while True:
         try:
@@ -252,6 +256,19 @@ def scheduler_loop():
             if day != last_day:
                 last_day, fired = day, set()
                 log.info("📅 新一日：%s（香港時間）", day)
+
+            # 2026-11-02：虛擬倉結算獨立跑，唔再依賴黃金掃描 ——
+            # 用戶明確要求「paper trade 千萬唔好停」，呢個係主要數據來源。
+            # 即使黃金掃描例外、時段外、或者 EA 斷線，呢度都會繼續結算。
+            if time.time() - last_paper >= 900:
+                last_paper = time.time()
+                try:
+                    import gold_paper
+                    _pr = gold_paper.settle()
+                    if _pr.get("settled"):
+                        log.info("虛擬倉結算 %d 筆（獨立排程）", _pr["settled"])
+                except Exception:  # noqa: BLE001
+                    log.exception("虛擬倉結算失敗（獨立排程）")
 
             hhmm = t.strftime("%H:%M")
             if hhmm in _schedule_targets() and hhmm not in fired:
@@ -894,6 +911,37 @@ def gold_ocr_status():
     return jsonify(d)
 
 
+@app.route("/api/gold/signal/approved")
+def gold_signal_approved():
+    """已批准但未執行 —— EA 輪詢（2026-11-02 加）。
+
+    流程：Telegram 撳「是」→ approve_signal() 標記 → 呢個端點回傳 → EA 落單
+         → mark_executed() 標記，唔會重複落。
+    """
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    import gold
+    try:
+        age = int(request.args.get("max_age", 30))
+    except Exception:  # noqa: BLE001
+        age = 30
+    sig = gold.approved_signals(max_age_min=age)
+    return jsonify({"ok": True, "signals": sig,
+                    "now": now_hk().strftime("%Y-%m-%d %H:%M")})
+
+
+@app.route("/api/gold/signal/executed", methods=["POST"])
+def gold_signal_executed():
+    """EA 落單成功後回報 —— 防止重複落單。"""
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    import gold
+    sid = (request.get_json(silent=True) or {}).get("id")
+    if not sid:
+        return jsonify({"ok": False, "error": "冇 id"}), 400
+    return jsonify({"ok": gold.mark_executed(int(sid))})
+
+
 @app.route("/api/gold/signal/pending")
 def gold_signal_pending():
     """EA 半自動落單用：回傳最近未執行嘅正式訊號（2026-11-02 加）。
@@ -942,6 +990,13 @@ def gold_hist_api():
     """
     import hist_ref
     return jsonify({"ok": True, **hist_ref.summary()})
+
+
+@app.route("/api/gold/breaks")
+def gold_breaks_api():
+    """假突破記錄 —— 2026-11-02 加（純統計，唔影響訊號）。"""
+    import gold_breaks
+    return jsonify(gold_breaks.stats())
 
 
 @app.route("/api/gold/paper")

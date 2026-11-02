@@ -13,6 +13,7 @@ import requests
 
 log = logging.getLogger("tylove.notify")
 _API = "https://api.telegram.org/bot{token}/sendMessage"
+_API_PHOTO = "https://api.telegram.org/bot{token}/sendPhoto"
 
 # channel -> (token 設定名, chat_id 設定名)
 CHANNEL_KEYS = {
@@ -53,15 +54,16 @@ def _creds(channel: str):
     return _lookup(tok_name), _lookup(chat_name)
 
 
-def _send(text: str, chat_id: str, token: str) -> bool:
+def _send(text: str, chat_id: str, token: str, keyboard=None) -> bool:
     if not token:
         log.info("[通知-未設定Telegram]\n%s", text)
         return False
     try:
         resp = requests.post(
             _API.format(token=token),
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown",
-                  "disable_web_page_preview": True},
+            json={**{"chat_id": chat_id, "text": text, "parse_mode": "Markdown",
+                     "disable_web_page_preview": True},
+                  **({"reply_markup": {"inline_keyboard": keyboard}} if keyboard else {})},
             timeout=15,
         )
         if resp.status_code != 200:
@@ -168,7 +170,43 @@ def diagnose(channel: str = "gold", send_test: bool = True) -> dict:
     return out
 
 
-def push(text: str, channel: str = "hk") -> bool:
+def push_photos(pngs, caption: str = "", channel: str = "gold",
+                keyboard=None) -> bool:
+    """發圖片（可多張）—— 2026-11-02 加。
+
+    用戶要求訊號附 M1/M15 圖：實測發現有機會係反方向，
+    睇圖再撳「落單」會穩陣啲。圖片按順序逐張發，最後一張帶按鈕。
+    """
+    token, chat_id = _creds(channel)
+    if not chat_id or not token:
+        log.info("[圖片-%s-無憑證] %d 張", channel, len(pngs or []))
+        return False
+    ok = True
+    lst = [p for p in (pngs or []) if p]
+    for i, png in enumerate(lst):
+        last = (i == len(lst) - 1)
+        kb = keyboard if (last and keyboard) else None
+        try:
+            data = {"chat_id": chat_id}
+            if i == 0 and caption:
+                data["caption"] = caption[:1000]
+                data["parse_mode"] = "Markdown"
+            if kb:
+                import json as _json
+                data["reply_markup"] = _json.dumps({"inline_keyboard": kb})
+            r = requests.post(_API_PHOTO.format(token=token), data=data,
+                              files={"photo": ("chart.png", png, "image/png")},
+                              timeout=30)
+            if r.status_code != 200:
+                log.warning("發圖失敗 HTTP %s: %s", r.status_code, r.text[:160])
+                ok = False
+        except Exception:  # noqa: BLE001
+            log.exception("發圖出錯")
+            ok = False
+    return ok
+
+
+def push(text: str, channel: str = "hk", keyboard=None) -> bool:
     """發到指定 channel。長訊息自動分段（Telegram 上限 4096 字）。"""
     token, chat_id = _creds(channel)
     if not chat_id:
@@ -184,7 +222,12 @@ def push(text: str, channel: str = "hk") -> bool:
         parts.append(chunk[:cut])
         chunk = chunk[cut:]
     parts.append(chunk)
-    return all(_send(p, chat_id, token) for p in parts)
+    # 2026-11-02：只有最後一段帶按鈕（Telegram 每個訊息獨立）
+    out = []
+    for i, p in enumerate(parts):
+        kb = keyboard if i == len(parts) - 1 else None
+        out.append(_send(p, chat_id, token, keyboard=kb))
+    return all(out)
 
 
 # ------------------------------------------------------------------ 格式化：港股

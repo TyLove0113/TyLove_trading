@@ -185,6 +185,10 @@ def stats() -> dict:
             "last_day": days[-1] if days else None,
             "span_days": len(days),
             "by_direction": dirs,
+            # 2026-11-02：用戶要確保「paper trade 千萬唔好停」——
+            # 顯示最後一次開倉時間，證明系統仲活著。
+            "latest_signal_at": (max(str(r["signal_ts"]) for r in rows) if rows else None),
+            "open_now": len(rows) - n,
             "recent": detail}
 
 

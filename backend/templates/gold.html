@@ -103,6 +103,19 @@
   <div id="tgDiag"></div>
 </div>
 
+<!-- 真假突破記錄（2026-11-02）-->
+<div class="card p-4 mb-5">
+  <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+    <div class="text-sm font-semibold">🔍 真假突破記錄</div>
+    <button onclick="loadBreaks()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">重新載入</button>
+  </div>
+  <div class="text-xs text-slate-400 mb-3 leading-relaxed">
+    「預警」發出後，等 K 線收盤睇係唔係真突破。<b class="text-sky-300">只記錄，唔推送、唔落單、唔影響策略</b>。
+    <span class="text-amber-400">累積夠樣本才有統計意義。</span>
+  </div>
+  <div id="breaksBox" class="text-xs text-slate-400">載入中…</div>
+</div>
+
 <!-- 歷史對照（2026-11-02）-->
 <div class="card p-4 mb-5">
   <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -698,6 +711,64 @@ async function loadHist(){
   } catch (e) { box.textContent = '讀取失敗'; }
 }
 
+// ==================== 真假突破記錄（2026-11-02）====================
+async function loadBreaks(){
+  const box = $('breaksBox');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/api/gold/breaks')).json();
+    if (!d.total && !d.pending) {
+      box.innerHTML = '<div class="muted">📭 仲未有記錄 —— 下次出「預警」就會開始記。</div>';
+      return;
+    }
+    let h = '<div class="flex gap-3 flex-wrap mb-2">'
+      + card('真突破', d.real, '#4ade80')
+      + card('假突破', d.fake, '#f87171')
+      + card('待判定', d.pending, '#94a3b8');
+    if (d.fake_pct !== null && d.fake_pct !== undefined) {
+      h += card('假突破率', d.fake_pct + '%', d.fake_pct >= 50 ? '#f87171' : '#4ade80');
+    }
+    if (d.avg_fake_move) h += card('假突破平均反彈', d.avg_fake_move, '#fbbf24');
+    h += '</div>';
+
+    if (d.recent && d.recent.length) {
+      h += '<div class="mt-3 overflow-x-auto"><table class="w-full text-xs">'
+        + '<thead class="text-slate-500"><tr>'
+        + '<th class="text-left py-1 pr-2">預警時間</th>'
+        + '<th class="text-left pr-2">方向</th>'
+        + '<th class="text-right pr-2">突破位</th>'
+        + '<th class="text-left pr-2">結果</th>'
+        + '<th class="text-right">收盤偏差</th></tr></thead><tbody>' ;
+      for (const x of d.recent) {
+        const v = x.verdict;
+        const label = v === 'fake' ? '<span style="color:#f87171">❌ 假突破</span>'
+                    : v === 'real' ? '<span style="color:#4ade80">✅ 真信號</span>'
+                    : '<span style="color:#94a3b8">⏳ 待收盤</span>' ;
+        const mv = (x.move === null || x.move === undefined) ? '—'
+                 : (x.move > 0 ? '+' : '') + Number(x.move).toFixed(2);
+        h += '<tr class="border-t border-slate-800">'
+          + '<td class="py-1 pr-2 whitespace-nowrap">' + x.ts + '</td>'
+          + '<td class="pr-2">' + (x.dir === 'long' ? '🟢 做多' : '🔴 做空') + '</td>'
+          + '<td class="text-right pr-2">' + Number(x.level).toFixed(2) + '</td>'
+          + '<td class="pr-2">' + label + '</td>'
+          + '<td class="text-right">' + mv + '</td></tr>';
+      }
+      h += '</tbody></table></div>';
+    }
+    if (d.total && d.total < 30) {
+      h += '<div class="mt-2 text-amber-400">仲要 ' + (30 - d.total)
+         + ' 筆才夠 30 筆 — 而家嘅假突破率未有統計意義。</div>';
+    }
+    box.innerHTML = h;
+  } catch(e) { box.textContent = '讀取失敗'; }
+}
+
+function card(label, val, color){
+  return '<div class="p-2.5 rounded-lg bg-slate-800/60 flex-1 min-w-[90px]">'
+    + '<div class="text-slate-400 text-[10px]">' + label + '</div>'
+    + '<div class="text-base font-semibold" style="color:' + color + '">' + val + '</div></div>';
+}
+
 // ==================== 交易日誌 ====================
 let jData = {trades: [], stats: {}, follow_options: {}};
 
@@ -718,6 +789,7 @@ async function loadJournal() {
     jList(d.trades);
     loadPaper();
     loadHist();
+    loadBreaks();
   } catch (e) { $('jList').textContent = '載入失敗：' + e; }
 }
 

@@ -894,6 +894,45 @@ def gold_ocr_status():
     return jsonify(d)
 
 
+@app.route("/api/gold/signal/pending")
+def gold_signal_pending():
+    """EA 半自動落單用：回傳最近未執行嘅正式訊號（2026-11-02 加）。
+
+    設計原則（用戶要求）：EA 只負責「彈窗 + 填好數」，撳唔撳由用戶決定。
+    所以呢個端點只讀，唔會落單；EA 亦強制只喺 demo 帳戶運作。
+    """
+    import gold
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    try:
+        max_age = int(request.args.get("max_age", 30))
+    except (TypeError, ValueError):
+        max_age = 30
+    now = now_hk()
+    gold.init_db()
+    out = []
+    with gold._conn() as c:  # noqa: SLF001
+        rows = c.execute(
+            "SELECT id, ts, direction, entry, stop, target, lot, atr "
+            "FROM gold_signals ORDER BY id DESC LIMIT 20").fetchall()
+    for r in rows:
+        try:
+            from datetime import datetime as _dt
+            t = _dt.strptime(str(r["ts"]), "%Y-%m-%d %H:%M").replace(
+                tzinfo=now.tzinfo)
+        except (ValueError, TypeError):
+            continue
+        age = (now - t).total_seconds() / 60
+        if age < 0 or age > max_age:
+            continue
+        out.append({"id": int(r["id"]), "ts": r["ts"],
+                    "direction": r["direction"], "entry": r["entry"],
+                    "stop": r["stop"], "target": r["target"],
+                    "lot": r["lot"], "atr": r["atr"],
+                    "age_min": round(age, 1)})
+    return jsonify({"ok": True, "signals": out, "now": now.strftime("%Y-%m-%d %H:%M")})
+
+
 @app.route("/api/gold/hist")
 def gold_hist_api():
     """歷史對照統計（2026-11-02 加）。

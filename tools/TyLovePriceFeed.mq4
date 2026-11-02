@@ -25,7 +25,16 @@
 #property version   "2.22"
 #property strict
 
-#define EA_VERSION "v2.3"
+// 2026-11-02：半自動落單用嘅確認窗（要喺 MT4 開「允許 DLL 匯入」）
+#import "user32.dll"
+int MessageBoxW(int hWnd, string text, string caption, int type);
+#import
+
+#define MB_YESNO        4
+#define MB_ICONQUESTION 32
+#define IDYES           6
+
+#define EA_VERSION "v2.4"
 
 //================= 你只需要改呢兩行 =================
 extern string API_BASE         = "https://xxxx.up.railway.app";
@@ -33,6 +42,12 @@ extern string FEED_TOKEN       = "";
 //===================================================
 
 extern int    TickSeconds      = 5;    // 每幾秒推一次即時報價
+// ── 半自動落單（2026-11-02）──
+extern bool   AllowAutoTrade   = true;   // 開關：允許 EA 幫你落單（只限 demo）
+extern bool   ConfirmEach      = true;   // true = 每次彈窗問你；false = 直接落
+extern double MaxAutoLot       = 0.01;   // 自動落單手數上限（安全網）
+extern int    AutoEveryMin     = 1;      // 每幾分鐘查一次有冇新訊號
+extern int    AutoMaxAgeMin    = 10;     // 訊號超過幾多分鐘就唔再落
 extern int    BarMinutes       = 15;   // K 線週期（分鐘）
 extern string PushFrames       = "M15,H1,H4";  // 多時框（2026-11-02 改預設）；留空 = 只用 BarMinutes
 extern int    M1Bars           = 2000; // M1 開頭推幾多支（M1 變化快，要多啲）
@@ -248,6 +263,125 @@ void PushAllFrames(int n) {
     }
 }
 
+// ==================== 半自動落單（2026-11-02）====================
+// 設計：EA 只查詢系統有冇新訊號 → 彈窗問你 → 你撳「是」才落單。
+// 三重安全：① 只限 demo 帳戶 ② 手數上限 MaxAutoLot ③ AllowAutoTrade 開關
+int g_lastDoneId = 0;
+datetime g_lastAutoCheck = 0;
+
+bool Get(string path, string &out) {
+    string url = g_base + path;
+    string headers = "X-Feed-Token: " + FEED_TOKEN + "\r\n";
+    char post[], result[];
+    string rh;
+    ResetLastError();
+    int code = WebRequest("GET", url, headers, 5000, post, result, rh);
+    if (code == -1) {
+        Print("GET 失敗 ", path, " 錯誤碼=", GetLastError());
+        return false;
+    }
+    if (code != 200) { Print("GET ", path, " HTTP=", code); return false; }
+    out = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+    return true;
+}
+
+// 由 JSON 抓 "key": 後面嘅值（數字或字串）
+string JVal(string js, string key) {
+    string pat = "\"" + key + "\":";
+    int i = StringFind(js, pat);
+    if (i < 0) return "";
+    i += StringLen(pat);
+    while (i < StringLen(js) && StringGetChar(js, i) == ' ') i++;
+    int a = i;
+    while (i < StringLen(js)) {
+        int ch = StringGetChar(js, i);
+        if (ch == ',' || ch == '}' || ch == ']') break;
+        i++;
+    }
+    string v = StringSubstr(js, a, i - a);
+    StringTrimLeft(v); StringTrimRight(v);
+    if (StringLen(v) > 0 && StringGetChar(v, 0) == '"')
+        v = StringSubstr(v, 1, StringLen(v) - 2);
+    return v;
+}
+
+void DoTrade(int sid, string dir, double entry, double stop, double target, double lot) {
+    if (!IsDemo()) {
+        Print("⚠️ 唔係 demo 帳戶 —— 為安全起見拒絕自動落單");
+        return;
+    }
+    double use = MathMin(lot, MaxAutoLot);
+    if (use < MarketInfo(g_sym, MODE_MINLOT)) use = MarketInfo(g_sym, MODE_MINLOT);
+    if (use > MarketInfo(g_sym, MODE_MAXLOT)) use = MarketInfo(g_sym, MODE_MAXLOT);
+
+    int type = (dir == "long") ? OP_BUY : OP_SELL;
+    double px = (type == OP_BUY) ? Ask : Bid;
+    int t = OrderSend(g_sym, type, use, px, 30, stop, target,
+                      "TyLove#" + IntegerToString(sid), sid, 0,
+                      (type == OP_BUY) ? clrDodgerBlue : clrOrangeRed);
+    if (t < 0) {
+        Print("❌ 落單失敗 錯誤碼=", GetLastError(), " 手數=", DoubleToString(use, 2));
+        Alert("TyLove 落單失敗，錯誤碼 ", GetLastError());
+        return;
+    }
+    g_lastDoneId = sid;
+    Print("✅ 已落單 #", t, " 訊號#", sid, " ", dir, " ",
+          DoubleToString(use, 2), " 手 @", DoubleToString(px, g_digits),
+          " SL=", DoubleToString(stop, g_digits),
+          " TP=", DoubleToString(target, g_digits));
+    Alert("TyLove 已落單：", dir, " ", DoubleToString(use, 2), " 手");
+}
+
+void CheckPending() {
+    if (!AllowAutoTrade) return;
+    if (TimeLocal() - g_lastAutoCheck < AutoEveryMin * 60) return;
+    g_lastAutoCheck = TimeLocal();
+
+    string js;
+    if (!Get("/api/gold/signal/pending?max_age=" + IntegerToString(AutoMaxAgeMin), js))
+        return;
+
+    int p = StringFind(js, "[{");
+    if (p < 0) return;
+
+    // 逐個物件處理（由新到舊）
+    int guard = 0;
+    while (p >= 0 && guard < 20) {
+        guard++;
+        int e = StringFind(js, "}", p);
+        if (e < 0) break;
+        string obj = StringSubstr(js, p, e - p + 1);
+        p = StringFind(js, "{\"id\":", e);
+
+        int sid = (int)StringToInteger(JVal(obj, "id"));
+        if (sid <= 0 || sid <= g_lastDoneId) continue;
+        string dir = JVal(obj, "direction");
+        double entry  = StringToDouble(JVal(obj, "entry"));
+        double stop   = StringToDouble(JVal(obj, "stop"));
+        double target = StringToDouble(JVal(obj, "target"));
+        double lot    = StringToDouble(JVal(obj, "lot"));
+        if (dir == "" || entry <= 0 || stop <= 0 || target <= 0) continue;
+
+        string msg = StringFormat(
+            "有新的黃金訊號（#%d）\n\n方向：%s\n入場：%s\n止蝕：%s\n目標：%s\n手數：%s\n\n確定落單？",
+            sid, (dir == "long" ? "做多（BUY）" : "做空（SELL）"),
+            DoubleToString(entry, g_digits), DoubleToString(stop, g_digits),
+            DoubleToString(target, g_digits), DoubleToString(MathMin(lot, MaxAutoLot), 2));
+
+        if (ConfirmEach) {
+            int r = MessageBoxW(0, msg, "TyLove 訊號確認", MB_YESNO | MB_ICONQUESTION);
+            if (r != IDYES) {
+                Print("用戶取消訊號 #", sid);
+                g_lastDoneId = sid;
+                continue;
+            }
+        } else {
+            Print("自動落單（未確認模式）：", msg);
+        }
+        DoTrade(sid, dir, entry, stop, target, lot);
+    }
+}
+
 void ShowStatus() {
     string conn = (g_quoteLag > 180)
                   ? "⚠️ 券商報價停滯 " + IntegerToString(g_quoteLag) + " 秒"
@@ -311,6 +445,7 @@ void OnTimer() {
     g_quoteLag = (int)(TimeLocal() - g_lastQuoteAt);
 
     SendTick();
+    CheckPending();
 
     // ⚠️ 一定要用 TimeLocal()（電腦時鐘）計時。
     //    v1.0 用咗 TimeCurrent() —— 佢係「最後報價時間」，

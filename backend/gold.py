@@ -486,6 +486,17 @@ def evaluate(df: pd.DataFrame = None) -> dict:
         ],
         "state": f"{'做多' if direction == 'long' else '做空'}訊號",
     })
+
+    # 2026-11-02：歷史對照 —— 用 22.4 年真實現貨數據，顯示「同類情況」嘅歷史表現。
+    # ⚠️ 純參考，唔影響訊號同手數。數字係毛利率（未扣點差）。
+    try:
+        import hist_ref
+        out["hist"] = hist_ref.lookup(
+            direction,
+            datetime.now(ZoneInfo(config.HK_TZ)).hour,
+            atr, price, _bias)
+    except Exception:  # noqa: BLE001
+        log.debug("歷史對照查表失敗（唔阻訊號）", exc_info=True)
     return out
 
 

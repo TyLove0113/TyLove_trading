@@ -314,6 +314,30 @@ def _mtf_line(g: dict) -> str:
     return ("📊 *多時框動能*：" + "　".join(parts)) if parts else ""
 
 
+def _hist_line(g: dict) -> str:
+    """歷史對照 —— 2026-11-02 加。
+
+    用 22.4 年真實現貨數據（2004-2026），顯示同方向／同時段／同 H1 方向
+    嘅歷史表現。數字係毛利率（未扣點差），所以系統會提示你實際會更差。
+    """
+    h = g.get("hist") or {}
+    if not h or not h.get("ok"):
+        return ""
+    txt = ("📚 *歷史對照*（22.4 年，%s 次）：勝率 %.1f%%、平均 %+.3fR"
+           % (format(int(h.get("n") or 0), ","), float(h.get("win") or 0),
+              float(h.get("avg") or 0)))
+    # 扣成本提示：用戶點差 0.41 美元，止蝕約 1.2×ATR
+    try:
+        atr = float(g.get("atr") or 0)
+        if atr > 0:
+            cost_r = 0.41 / (1.2 * atr)
+            txt += "\n     ↳ 扣 %0.2f 成本（點差 0.41）後約 %+.3fR" % (
+                cost_r, float(h.get("avg") or 0) - cost_r)
+    except Exception:  # noqa: BLE001
+        pass
+    return txt
+
+
 def fmt_gold_signal(g: dict) -> str:
     """黃金訊號通知（正式版：K 線已收盤）。"""
     if not g.get("has_signal"):
@@ -391,6 +415,7 @@ def fmt_gold_signal(g: dict) -> str:
         _bias_line(g.get("daily_bias")),
         _trend_line(g.get("reasons", [])),
         _mtf_line(g),
+        _hist_line(g),
         "理由：" + "；".join(_other_reasons(g.get("reasons", []))[:3]),
         "",
         f"⚠️ {g.get('disclaimer','')}",

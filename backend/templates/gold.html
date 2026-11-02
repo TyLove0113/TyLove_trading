@@ -103,6 +103,19 @@
   <div id="tgDiag"></div>
 </div>
 
+<!-- 歷史對照（2026-11-02）-->
+<div class="card p-4 mb-5">
+  <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+    <div class="text-sm font-semibold">📚 歷史對照（22.4 年真實現貨）</div>
+    <button onclick="loadHist()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">重新載入</button>
+  </div>
+  <div class="text-xs text-slate-400 mb-3 leading-relaxed">
+    每個訊號都會對照歷史同類情況嘅表現。數字係<b class="text-sky-300">毛利率（未扣點差）</b>，
+    扣咗你 0.41 點差之後通常會更差。
+  </div>
+  <div id="histBox" class="text-xs text-slate-400">載入中…</div>
+</div>
+
 <!-- 虛擬落單（2026-10-22）-->
 <div class="card p-4 mb-5">
   <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -602,11 +615,87 @@ async function loadPaper(){
       }
       h += '</tbody></table>';
     }
+    // 2026-11-02：加明細表（用戶要求「好似交易日誌個格式」，唔想淨係睇個數）
+    if (d.first_day) {
+      h += `<div class="mt-3 mb-2 text-[11px] text-slate-400">`
+        + `範圍 ${d.first_day} → ${d.last_day}（${d.span_days} 個交易日）`
+        + (d.by_direction ? `　方向：` + Object.entries(d.by_direction)
+            .map(([k,v]) => (k==='long'?'🟢多 ':'🔴空 ') + v).join('／') : '')
+        + `</div>`;
+    }
+    const recent = (d.recent || []).slice().reverse();
+    if (recent.length) {
+      let win = 0, lose = 0;
+      h += '<div class="overflow-x-auto"><table class="w-full text-[11px]"><thead>'
+        + '<tr class="text-slate-500"><th class="text-left py-1">訊號時間</th>'
+        + '<th class="text-left">方向</th><th class="text-right">入場</th>'
+        + '<th class="text-right">止蝕</th><th class="text-right">目標</th>'
+        + '<th class="text-left">結果</th><th class="text-right">R</th></tr></thead><tbody>';
+      for (const r of recent) {
+        const won = r.status === 'win';
+        if (won) win++; else lose++;
+        const col = won ? '#4ade80' : '#f87171';
+        h += `<tr class="border-t border-slate-800">`
+          + `<td class="py-1 whitespace-nowrap">${r.ts || '—'}</td>`
+          + `<td>${r.dir === 'long' ? '🟢 多' : '🔴 空'}</td>`
+          + `<td class="text-right">${Number(r.entry||0).toFixed(2)}</td>`
+          + `<td class="text-right">${Number(r.stop||0).toFixed(2)}</td>`
+          + `<td class="text-right">${Number(r.target||0).toFixed(2)}</td>`
+          + `<td style="color:${col}">${won ? '✅ 贏' : '❌ 輸'}</td>`
+          + `<td class="text-right" style="color:${col}">${(r.pnl_atr>0?'+':'') + Number(r.pnl_atr||0).toFixed(2)}</td></tr>`;
+      }
+      h += `</tbody></table></div>`;
+      h += `<div class="mt-1 text-[11px] text-slate-400">`
+        + `最近 ${recent.length} 筆：贏 ${win}　輸 ${lose}　`
+        + `勝率 ${(100*win/recent.length).toFixed(1)}%</div>`;
+    }
     if (d.closed && d.closed < 30) {
       h += `<div class="mt-2 text-amber-400">仲要 ${30-d.closed} 筆才夠 30 筆 — 而家嘅勝率未有統計意義。</div>`;
     }
     box.innerHTML = h;
   } catch(e) { box.textContent = '讀取失敗'; }
+}
+
+// ==================== 歷史對照（2026-11-02）====================
+async function loadHist(){
+  const box = $('histBox');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/api/gold/hist')).json();
+    if (!d.ok) { box.textContent = '讀取失敗：' + (d.error || ''); return; }
+    const m = d.meta || {};
+    let h = `<div class="text-slate-500 mb-2">來源：${m.source || '—'}　`
+          + `K 線 ${(m.bars||0).toLocaleString()} 支　${m.from || ''} → ${m.to || ''}</div>`;
+    const ov = d.overall || {};
+    h += `<div class="mb-2">總體：<b>${ov.n ? ov.n.toLocaleString() : 0}</b> 個樣本　`
+       + `勝率 <b>${ov.win != null ? ov.win + '%' : '—'}</b>　`
+       + `每筆 <b style="color:${(ov.avg||0)>=0?'#4ade80':'#f87171'}">`
+       + `${(ov.avg||0)>0?'+':''}${ov.avg != null ? ov.avg : '—'}R</b></div>`;
+    const tbl = (title, obj, keyName) => {
+      if (!obj || !Object.keys(obj).length) return '';
+      let t = `<div class="mt-3 mb-1 text-slate-300">${title}</div>`
+            + '<table class="w-full text-left"><thead class="text-slate-500"><tr>'
+            + `<th>${keyName}</th><th class="text-right">樣本</th>`
+            + '<th class="text-right">勝率</th><th class="text-right">每筆 R</th>'
+            + '</tr></thead><tbody>';
+      for (const [k, v] of Object.entries(obj)) {
+        if (!v || typeof v !== 'object') continue;
+        const c = (v.avg||0) >= 0 ? '#4ade80' : '#f87171';
+        t += `<tr class="border-t border-slate-800"><td class="py-1">${k}</td>`
+           + `<td class="text-right">${(v.n||0).toLocaleString()}</td>`
+           + `<td class="text-right">${v.win != null ? v.win + '%' : '—'}</td>`
+           + `<td class="text-right" style="color:${c}">`
+           + `${(v.avg||0)>0?'+':''}${v.avg != null ? v.avg : '—'}R</td></tr>`;
+      }
+      return t + '</tbody></table>';
+    };
+    h += tbl('按方向', d.by_side, '方向');
+    h += tbl('按時段（香港時間）', d.by_hour, '時段');
+    h += tbl('按 H1 方向', d.by_h1, '與 H1');
+    h += '<div class="mt-3 text-amber-400">⚠️ 以上係毛利率，未扣點差（你 0.41）。'
+       + '扣之後每筆大約再減 0.05–0.15R。</div>';
+    box.innerHTML = h;
+  } catch (e) { box.textContent = '讀取失敗'; }
 }
 
 // ==================== 交易日誌 ====================
@@ -628,6 +717,7 @@ async function loadJournal() {
     jDrafts(d.drafts || []);
     jList(d.trades);
     loadPaper();
+    loadHist();
   } catch (e) { $('jList').textContent = '載入失敗：' + e; }
 }
 

@@ -894,6 +894,17 @@ def gold_ocr_status():
     return jsonify(d)
 
 
+@app.route("/api/gold/hist")
+def gold_hist_api():
+    """歷史對照統計（2026-11-02 加）。
+
+    用戶想「喺邊到 check 到依家係加咗歷史數據做分析」——
+    呢個端點直接顯示 22.4 年統計表，唔需要等有訊號才見到。
+    """
+    import hist_ref
+    return jsonify({"ok": True, **hist_ref.summary()})
+
+
 @app.route("/api/gold/paper")
 def gold_paper_api():
     """虛擬落單統計（2026-10-22 新增）。"""

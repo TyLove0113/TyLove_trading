@@ -221,6 +221,32 @@ def _status() -> str:
         if len(ds) > 8:
             lines.append("　…仲有 %d 張" % (len(ds) - 8))
         lines += ["", "去網頁 /gold 核對同確認。"]
+
+    # 2026-11-02：加虛擬倉（paper trade）—— 用戶問「/status 睇唔到 paper trade」。
+    # 呢個係系統自己開嘅虛擬倉，同上面「交易日誌」係兩件事：
+    #   交易日誌 = 你親手落嘅真單
+    #   虛擬倉   = 每個訊號自動開嘅模擬單（唔會落真單）
+    try:
+        import gold_paper as GP
+        ps = GP.stats()
+        n_c = int(ps.get("closed") or 0)
+        if n_c or int(ps.get("open") or 0):
+            lines += ["", "━" * 12, "🧪 *虛擬倉（自動，非真單）*",
+                      "已結算：*%d* 筆　持倉中：*%d* 筆"
+                      % (n_c, int(ps.get("open") or 0))]
+            if n_c:
+                lines += ["勝率：*%.1f%%*　每筆期望：*%+.2f ATR*"
+                          % (float(ps.get("win_rate") or 0),
+                             float(ps.get("expectancy_atr") or 0))]
+                if ps.get("first_day"):
+                    lines.append("_範圍 %s → %s（%s 個交易日）_"
+                                 % (ps.get("first_day"), ps.get("last_day"),
+                                    ps.get("span_days")))
+                if n_c < 30:
+                    lines.append("_仲差 %d 筆才夠 30 筆 — 未有統計意義_" % (30 - n_c))
+                lines.append("_詳情去網頁 /gold 睇「🧪 虛擬帳戶」_")
+    except Exception:  # noqa: BLE001
+        log.debug("讀虛擬倉統計失敗（唔阻 /status）", exc_info=True)
     return "\n".join(lines)
 
 

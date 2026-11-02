@@ -105,3 +105,16 @@ def describe(r: dict) -> str:
         return ""
     return ("歷史上同類情況（%s，%d 次）：勝率 %.1f%%、平均 %+.3fR（未扣點差）"
             % (r["label"], r["n"], r["win"], r["avg"]))
+
+
+def summary() -> dict:
+    """完整統計表 —— 給網頁顯示（2026-11-02 加）。"""
+    d = _load()
+    if not d:
+        return {"ok": False, "error": "hist_stats.json 讀唔到"}
+    return {
+        "ok": True,
+        "meta": d.get("meta"), "overall": d.get("overall"),
+        "by_side": d.get("by_side"), "by_hour": d.get("by_hour"),
+        "by_h1": d.get("by_h1"), "by_side_h1": d.get("by_side_h1"),
+    }

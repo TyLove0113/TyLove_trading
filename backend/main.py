@@ -922,12 +922,31 @@ def gold_signal_approved():
         return jsonify({"ok": False, "error": "token 唔啱"}), 403
     import gold
     try:
-        age = int(request.args.get("max_age", 30))
+        age = int(request.args.get("max_age", 60))  # 2026-11-03：30→60，容許 EA 遲到
     except Exception:  # noqa: BLE001
         age = 30
     sig = gold.approved_signals(max_age_min=age)
     return jsonify({"ok": True, "signals": sig,
                     "now": now_hk().strftime("%Y-%m-%d %H:%M")})
+
+
+@app.route("/api/gold/signal/debug")
+def gold_signal_debug():
+    """診斷用：最近訊號嘅 approved_at / executed_at（2026-11-03 加）。
+
+    用戶反映「撳咗是但冇落單」—— 需要睇清楚係批准冇標記、
+    定係已經標記咗 executed（EA 認領咗但落單失敗）。
+    """
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    import gold
+    gold.init_db()
+    with gold._conn() as c:
+        rows = c.execute(
+            "SELECT id, ts, direction, entry, lot, approved_at, executed_at "
+            "FROM gold_signals ORDER BY id DESC LIMIT 8").fetchall()
+    return jsonify({"ok": True, "now": now_hk().strftime("%Y-%m-%d %H:%M"),
+                    "rows": [{k: r[k] for k in r.keys()} for r in rows]})
 
 
 @app.route("/api/gold/signal/executed", methods=["POST"])

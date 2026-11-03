@@ -22,7 +22,7 @@
 //  v1.0  2026-09-23  第一版
 //+------------------------------------------------------------------+
 #property copyright "TyLove"
-#property version   "2.22"
+#property version   "2.31"
 #property strict
 
 // 2026-11-02：半自動落單用嘅確認窗（要喺 MT4 開「允許 DLL 匯入」）
@@ -34,22 +34,22 @@ int MessageBoxW(int hWnd, string text, string caption, int type);
 #define MB_ICONQUESTION 32
 #define IDYES           6
 
-#define EA_VERSION "v2.5"
+#define EA_VERSION "v2.6"
 
 //================= 你只需要改呢兩行 =================
-extern string API_BASE         = "https://xxxx.up.railway.app";
-extern string FEED_TOKEN       = "";
+extern string API_BASE         = "https://tylovetrading-production.up.railway.app";
+extern string FEED_TOKEN       = "TyLove_Gold";
 //===================================================
 
 extern int    TickSeconds      = 5;    // 每幾秒推一次即時報價
 // ── 半自動落單（2026-11-02）──
 extern bool   AllowAutoTrade   = true;   // 開關：允許 EA 幫你落單（只限 demo）
-extern bool   ConfirmEach      = true;   // true = 每次彈窗問你；false = 直接落
+extern bool   ConfirmEach      = false;  // 2026-11-03 預設 false：改由 Telegram 撳「是」批准
 extern double MaxAutoLot       = 0.01;   // 自動落單手數上限（安全網）
 extern int    AutoEveryMin     = 1;      // 每幾分鐘查一次有冇新訊號
-extern int    AutoMaxAgeMin    = 10;     // 訊號超過幾多分鐘就唔再落
+extern int    AutoMaxAgeMin    = 30;     // 訊號超過幾多分鐘就唔再落（2026-11-03：10→30，同後端一致）
 extern int    BarMinutes       = 15;   // K 線週期（分鐘）
-extern string PushFrames       = "M15,H1,H4";  // 多時框（2026-11-02 改預設）；留空 = 只用 BarMinutes
+extern string PushFrames       = "M1,M15,H1,H4"; // 多時框（2026-11-03 改預設）；留空 = 只用 BarMinutes
 extern int    M1Bars           = 2000; // M1 開頭推幾多支（M1 變化快，要多啲）
 extern int    BarCountFull     = 2000; // 開頭推幾多支歷史 K 線（2026-11-02：300 太少，改 2000）
 extern int    BarCountQuick    = 6;    // 之後每次補推幾多支
@@ -345,10 +345,22 @@ void CheckPending() {
     // 你喺手機撳「✅ 是」→ 後端標記 approved → EA 一分鐘內落單。
     // 唔撳 = 永遠唔會落單（呢個係設計核心，唔係漏洞）。
     string js;
-    if (!Get("/api/gold/signal/approved?max_age=" + IntegerToString(AutoMaxAgeMin), js))
+    if (!Get("/api/gold/signal/approved?max_age=" + IntegerToString(AutoMaxAgeMin), js)) {
+        Print("❌ 查詢已批准訊號失敗（WebRequest 唔通）");
         return;
+    }
 
     int p = StringFind(js, "[{");
+    // 2026-11-03：每秒都印會洗版，所以每 20 次（約 20 分鐘）報一次狀態
+    static int quietCnt = 0;
+    if (p < 0) {
+        quietCnt++;
+        if (quietCnt % 20 == 1)
+            Print("已批准訊號：暫時冇（EA 正常輪詢中，每 ",
+                  AutoEveryMin, " 分鐘一次）");
+        return;
+    }
+    quietCnt = 0;
     if (p < 0) return;
 
     // 逐個物件處理（由新到舊）
@@ -380,10 +392,20 @@ void CheckPending() {
         // 就失去「隨時落單」嘅意義。ConfirmEach=false 時仍可保留彈窗做後備。
         if (ConfirmEach) {
             int r = MessageBoxW(0, msg, "TyLove 訊號確認", MB_YESNO | MB_ICONQUESTION);
-            if (r != IDYES) {
-                Print("用戶取消訊號 #", sid);
+            // 2026-11-03 修（用戶反映「撳咗批准但成個鐘冇落單」）：
+            // MessageBoxW 返回 0 代表「呼叫失敗」，最常見係未開
+            // 「工具→選項→智能交易系統→允許 DLL 匯入」。
+            // 舊版把 0 當成「用戶取消」→ 設定 g_lastDoneId → 訊號永久被吃掉。
+            // 批准權其實喺 Telegram，彈窗只係後備，所以失敗時應該繼續落單。
+            if (r == IDNO) {
+                Print("用戶喺彈窗撳「否」，取消訊號 #", sid);
                 g_lastDoneId = sid;
                 continue;
+            }
+            if (r != IDYES) {
+                Print("⚠️ 彈窗失敗（返回 ", r, "，錯誤碼=", GetLastError(),
+                      "）—— 通常係未開「允許 DLL 匯入」。");
+                Print("   批准權已在 Telegram，繼續落單 #", sid);
             }
         }
         DoTrade(sid, dir, entry, stop, target, lot);

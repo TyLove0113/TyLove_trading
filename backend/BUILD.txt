@@ -1,6 +1,6 @@
-v4.9-20261102-2350
-2026-11-02 23:50 香港時間
-新：真假突破記錄（純記錄，唔推送、唔落單、唔改策略）
-新：網頁「真假突破」面板（真假分色顯示）
-EA v2.5：Telegram 一撳落單（只限 demo）
-港股：65 隻｜8 線程並行
+v4.9-20261103-1420
+2026-11-03 14:20 香港時間
+修：EA 彈窗失敗（無 DLL 權限）被誤判為「用戶取消」→ 訊號被吃掉、之後永久跳過
+修：EA 查詢失敗改為印日誌；已批准訊號預設 max_age 30→60
+新：/api/gold/signal/debug 診斷端點（睇 approved_at / executed_at）
+EA v2.6：預設已填 API_BASE / FEED_TOKEN / PushFrames=M1,M15,H1,H4 / ConfirmEach=false

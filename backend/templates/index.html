@@ -97,6 +97,13 @@
     </div>
   </div>
 
+  <h2 class="text-lg font-semibold mb-3">🔗 持倉相關性（風險疊加提示）</h2>
+  <div class="text-xs text-slate-500 mb-2 leading-relaxed">
+    相關性 ≥0.70 代表兩隻股票會同步升跌 —— 同時持有等於同一個風險做兩次。
+    <b class="text-slate-400">純提示，唔會影響評分或選股。</b>
+  </div>
+  <div id="corrBox" class="text-xs text-slate-500 mb-8">載入中…</div>
+
   <h2 class="text-lg font-semibold mb-3">📊 全部股票評分</h2>
   <div class="card scroll mb-8">
     <table><thead><tr>
@@ -231,6 +238,7 @@ function signalCard(s){
     ${n.catalyst?`<div class="text-xs text-indigo-300 mb-1">催化劑：${n.catalyst}</div>`:''}
     ${n.reason?`<div class="text-xs text-slate-500 mb-1">新聞：${n.reason}</div>`:''}
     ${notes?`<div class="text-xs text-slate-500">${notes}</div>`:''}
+    ${s.risk_hint?`<div class="text-xs mt-1.5 px-2 py-1 rounded" style="background:rgba(245,158,11,.10);color:#FCD34D;border-left:2px solid #F59E0B">${s.risk_hint}</div>`:''}
     <div class="mt-3">
       <button onclick="fillFromSignal('${s.symbol}',${p.entry||s.price})" class="text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600">記錄成持倉 →</button>
     </div>
@@ -413,6 +421,32 @@ function renderNews(rows){
   }).join('');
 }
 
+async function loadCorr(){
+  const box = document.getElementById('corrBox');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/api/hk/corr')).json();
+    const pairs = d.pairs || [];
+    if (!pairs.length) { box.textContent = '冇高相關配對（全部 <0.70）。'; return; }
+    let h = '<div class="overflow-x-auto"><table class="w-full text-[11px]">'
+      + '<thead class="text-slate-500"><tr><th class="text-left py-1 pr-2">A</th>'
+      + '<th class="text-left pr-2">B</th><th class="text-right pr-2">相關性</th>'
+      + '<th class="text-left">提示</th></tr></thead><tbody>';
+    for (const p of pairs.slice(0, 15)) {
+      const lv = p.r >= 0.85 ? '極高' : p.r >= 0.75 ? '高' : '中';
+      const col = p.r >= 0.85 ? '#f87171' : p.r >= 0.75 ? '#fb923c' : '#facc15';
+      h += `<tr class="border-t border-slate-800">`
+        + `<td class="py-1 whitespace-nowrap">${p.a} ${p.a_name||''}</td>`
+        + `<td class="whitespace-nowrap">${p.b} ${p.b_name||''}</td>`
+        + `<td class="text-right" style="color:${col}">${p.r.toFixed(2)} ${lv}</td>`
+        + `<td class="text-slate-500">${p.r>=0.85?'同步升跌，唔好同時買':'留意風險疊加'}</td></tr>`;
+    }
+    h += '</tbody></table></div>';
+    h += `<div class="mt-1 text-[11px] text-slate-500">共 ${pairs.length} 對（≥0.70）· 平均相關性 ${(d.avg||0).toFixed(2)} · 樣本 ${d.days||0} 個交易日</div>`;
+    box.innerHTML = h;
+  } catch(e) { box.textContent = '讀取失敗'; }
+}
+
 async function loadHistory(){
   try{
     const r = await fetch('/api/positions');
@@ -453,7 +487,7 @@ async function loadHistory(){
   }catch(e){ $('histList').textContent = '載入失敗：' + e; }
 }
 
-load(); loadSettings(); loadHistory();
+load(); loadSettings(); loadHistory(); loadCorr();
 loadDbStatus();
 setInterval(loadDbStatus, 120000);
 setInterval(load, 60000); setInterval(loadHistory, 300000);

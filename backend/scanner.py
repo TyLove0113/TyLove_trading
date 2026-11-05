@@ -132,11 +132,21 @@ def scan(watchlist: list[str] | None = None, push_summary: bool = True,
                 "rr_ratio": r["plan"].get("rr_ratio"), "veto": r["veto"],
             })
 
-    signals.sort(key=lambda x: -x["total_score"])
-    results.sort(key=lambda x: -x["total_score"])
-
     # 組合風控：有冇持倉、今日輸夠未
     open_pos = pos_mod.list_open()
+
+    # 2026-11-05：相關性提示（純提示，唔改評分、唔擋訊號、唔分組）
+    # 用戶要求：只出評分同提示，倉位同本金由佢自己決定。
+    try:
+        import hk_risk
+        held = [str(p.get("symbol") or "") for p in (open_pos or [])]
+        for s in signals:
+            s["risk_hint"] = hk_risk.hint(s.get("symbol"), held=held)
+    except Exception:  # noqa: BLE001
+        log.debug("相關性提示失敗（唔阻掃描）", exc_info=True)
+
+    signals.sort(key=lambda x: -x["total_score"])
+    results.sort(key=lambda x: -x["total_score"])
     allow = trade_plan.portfolio_guard(open_pos, today_pnl_pct())
 
     if push_summary:

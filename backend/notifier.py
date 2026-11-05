@@ -256,6 +256,10 @@ def fmt_signal(item: dict) -> str:
     top = [n for n in item.get("notes", []) if "+" in n][:3]
     if top:
         lines.append("評分要點：" + "；".join(top))
+    # 2026-11-05：相關性提示（純提示，唔影響評分）
+    if item.get("risk_hint"):
+        lines.append("")
+        lines.append(item["risk_hint"])
     lines.append("─ 買入決定由你本人執行 ─")
     return "\n".join(lines)
 

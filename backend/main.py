@@ -1128,6 +1128,13 @@ def gold_hist_api():
     return jsonify({"ok": True, **hist_ref.summary()})
 
 
+@app.route("/api/hk/corr")
+def hk_corr_api():
+    """港股相關性表（2026-11-05 加）—— 純參考，唔影響選股。"""
+    import hk_risk
+    return jsonify(hk_risk.summary())
+
+
 @app.route("/api/gold/breaks")
 def gold_breaks_api():
     """假突破記錄 —— 2026-11-02 加（純統計，唔影響訊號）。"""

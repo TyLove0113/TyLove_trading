@@ -303,7 +303,7 @@ async function closePosition(id, symbol, entry){
       body:JSON.stringify({exit_price:px, reason:'手動平倉'})});
     const d=await r.json();
     banner(d.ok?'已平倉並記錄成績':'平倉失敗', d.ok);
-    if(d.ok) load();
+    if(d.ok) { load(); loadHistory(); }   // 2026-11-04 修：原本只 load()，過往記錄唔會更新
   }catch(e){ banner('網絡錯誤，平倉失敗', false); }
 }
 

@@ -11,7 +11,8 @@ MT4 嘅成交歷史存喺券商伺服器，桌面版會下載返，所以用手�
 """
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import config
 
@@ -53,10 +54,77 @@ def init_db() -> None:
         log.exception("建立 mt4_deals 失敗")
 
 
+def migrate_utc_to_hk() -> int:
+    """一次性：把舊記錄嘅 UTC 時間轉成香港時間（2026-11-04）。
+
+    只處理 data_source='mt4' 嘅記錄 —— 即 EA 推過嚟嘅，
+    呢批一定係 UTC。手動輸入嘅唔會動。
+    用 settings 表做記號，只跑一次。
+    """
+    import journal
+    try:
+        with journal._conn() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS mig_flags("
+                      "name TEXT PRIMARY KEY, done_at TEXT)")
+            if c.execute("SELECT 1 FROM mig_flags WHERE name=?",
+                         ("utc2hk_v1",)).fetchone():
+                return 0
+            rows = c.execute(
+                "SELECT id, opened_at, closed_at FROM gold_trades "
+                "WHERE data_source='mt4' AND opened_at IS NOT NULL").fetchall()
+            n = 0
+            for r in rows:
+                def _pd(v):
+                    """寬鬆解析：有秒／冇秒都食（2026-11-04）。"""
+                    if not v:
+                        return None
+                    t = str(v).replace("T", " ").strip()[:19]
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                        try:
+                            return datetime.strptime(t, fmt)
+                        except ValueError:
+                            continue
+                    return None
+
+                try:
+                    o = _pd(r[1])
+                    if o is None:
+                        continue
+                    no = (o + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+                    nc = None
+                    cl = _pd(r[2])
+                    if cl is not None:
+                        nc = (cl + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+                    c.execute("UPDATE gold_trades SET opened_at=?, closed_at=? WHERE id=?",
+                              (no, nc, r[0]))
+                    n += 1
+                except Exception:  # noqa: BLE001
+                    continue
+            c.execute("INSERT OR REPLACE INTO mig_flags(name, done_at) VALUES(?,?)",
+                      ("utc2hk_v1", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            if n:
+                log.info("已把 %d 筆 MT4 記錄由 UTC 轉成香港時間", n)
+            return n
+    except Exception:  # noqa: BLE001
+        log.exception("時間遷移失敗")
+        return 0
+
+
 def _iso(ts) -> str:
+    """MT4 時間戳 → 香港時間字串（2026-11-04 修）。
+
+    原本直接輸出 UTC，令 MT4 顯示 09:21（券商伺服器 GMT+2）嘅單
+    喺系統變成 07:21，用戶以為時間亂咗。而家統一轉成香港時間。
+    """
     if not ts:
         return ""
-    return datetime.fromtimestamp(int(ts), timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        import config
+        hk = ZoneInfo(config.HK_TZ)
+    except Exception:  # noqa: BLE001
+        hk = timezone.utc
+    return datetime.fromtimestamp(int(ts), timezone.utc).astimezone(hk).strftime(
+        "%Y-%m-%d %H:%M:%S")
 
 
 def ingest(deals: list) -> dict:

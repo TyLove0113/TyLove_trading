@@ -961,6 +961,28 @@ def gold_signal_executed():
     return jsonify({"ok": gold.mark_executed(int(sid))})
 
 
+@app.route("/api/gold/signal/skipped", methods=["POST"])
+def gold_signal_skipped():
+    """EA 回報「呢張訊號跳過」—— 2026-11-03 加。
+
+    情況：價格已到目標（機會走完）、或偏離太遠。
+    標記 executed_at 但寫入備註，令網頁唔會顯示「已批准未執行」，
+    亦唔會令 EA 每分鐘重試。
+    """
+    if not _feed_auth():
+        return jsonify({"ok": False, "error": "token 唔啱"}), 403
+    import gold
+    d = request.get_json(silent=True) or {}
+    sid = d.get("id")
+    if not sid:
+        return jsonify({"ok": False, "error": "冇 id"}), 400
+    why = str(d.get("why") or "skipped")[:80]
+    ok = gold.mark_executed(int(sid))
+    if ok:
+        log.info("訊號 #%s 由 EA 標記跳過：%s", sid, why)
+    return jsonify({"ok": ok, "why": why})
+
+
 @app.route("/api/gold/signal/pending")
 def gold_signal_pending():
     """EA 半自動落單用：回傳最近未執行嘅正式訊號（2026-11-02 加）。
@@ -1186,6 +1208,12 @@ def start_background():
     _BG_STARTED = True
     init_db()
     import journal; journal.init_db()
+    # 2026-11-04：舊 MT4 記錄由 UTC 轉香港時間（只跑一次）
+    try:
+        import deals
+        deals.migrate_utc_to_hk()
+    except Exception:  # noqa: BLE001
+        log.exception("時間遷移失敗（唔阻啟動）")
     _warn_if_not_persistent()
     # 2026-10-15：啟動時自己檢查 tesseract 執行檔。
     # 之前 Railway 建置冇裝到，整個 OCR 停擺，用戶喺手機上完全唔知點算。

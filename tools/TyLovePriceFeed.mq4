@@ -22,7 +22,7 @@
 //  v1.0  2026-09-23  第一版
 //+------------------------------------------------------------------+
 #property copyright "TyLove"
-#property version   "2.31"
+#property version   "2.33"
 #property strict
 
 // 2026-11-02：半自動落單用嘅確認窗（要喺 MT4 開「允許 DLL 匯入」）
@@ -34,7 +34,7 @@ int MessageBoxW(int hWnd, string text, string caption, int type);
 #define MB_ICONQUESTION 32
 #define IDYES           6
 
-#define EA_VERSION "v2.6"
+#define EA_VERSION "v2.8"
 
 //================= 你只需要改呢兩行 =================
 extern string API_BASE         = "https://tylovetrading-production.up.railway.app";
@@ -315,25 +315,143 @@ void DoTrade(int sid, string dir, double entry, double stop, double target, doub
     if (use > MarketInfo(g_sym, MODE_MAXLOT)) use = MarketInfo(g_sym, MODE_MAXLOT);
 
     int type = (dir == "long") ? OP_BUY : OP_SELL;
-    double px = (type == OP_BUY) ? Ask : Bid;
-    int t = OrderSend(g_sym, type, use, px, 30, stop, target,
-                      "TyLove#" + IntegerToString(sid), sid, 0,
-                      (type == OP_BUY) ? clrDodgerBlue : clrOrangeRed);
-    if (t < 0) {
-        Print("❌ 落單失敗 錯誤碼=", GetLastError(), " 手數=", DoubleToString(use, 2));
-        Alert("TyLove 落單失敗，錯誤碼 ", GetLastError());
+
+    // ── 2026-11-03：用 MT4 當前報價，唔用系統嘅絕對價 ──
+    // 系統用 GC=F 期貨價（同 MT4 現貨差 20–30 美元），
+    // 直接落系統價會即刻撞 129（價格無效）。
+    // 改為：保留系統嘅「ATR 倍數」，但套喺 MT4 現價上。
+    double atrObj = StringToDouble(JVal(g_lastObj, "atr"));
+    double slMult = 1.2;
+    double tpMult = 3.0;
+    if (atrObj > 0) {
+        if (MathAbs(entry - stop) > 0)   slMult = MathAbs(entry - stop) / atrObj;
+        if (MathAbs(target - entry) > 0) tpMult = MathAbs(target - entry) / atrObj;
+    }
+    if (slMult <= 0 || slMult > 10) slMult = 1.2;
+    if (tpMult <= 0 || tpMult > 20) tpMult = 3.0;
+
+    RefreshRates();
+    double px = (type == OP_BUY) ? MarketInfo(g_sym, MODE_ASK) : MarketInfo(g_sym, MODE_BID);
+    if (px <= 0) { Print("❌ 取唔到報價，放棄訊號 #", sid); return; }
+
+    // ── 訊號失效檢查 ──
+    // 做空：現價已跌穿目標 → 機會已走完；做多：現價已升穿目標 → 同樣
+    if (type == OP_SELL && target > 0 && px <= target) {
+        Print("⏭ 訊號 #", sid, " 已失效：現價 ", DoubleToString(px, g_digits),
+              " 已跌穿目標 ", DoubleToString(target, g_digits), " —— 唔追");
+        Alert("TyLove：訊號 #", sid, " 已失效（價格已到目標），已跳過");
+        g_lastDoneId = sid;
+        MarkSkipped(sid, "price_passed_target");
         return;
     }
+    if (type == OP_BUY && target > 0 && px >= target) {
+        Print("⏭ 訊號 #", sid, " 已失效：現價 ", DoubleToString(px, g_digits),
+              " 已升穿目標 ", DoubleToString(target, g_digits), " —— 唔追");
+        Alert("TyLove：訊號 #", sid, " 已失效（價格已到目標），已跳過");
+        g_lastDoneId = sid;
+        MarkSkipped(sid, "price_passed_target");
+        return;
+    }
+
+    // 用 MT4 現價重算止蝕／目標（保持系統嘅風險回報比例）
+    double useStop = (type == OP_BUY) ? px - slMult * atrObj : px + slMult * atrObj;
+    double useTgt  = (type == OP_BUY) ? px + tpMult * atrObj : px - tpMult * atrObj;
+    if (atrObj <= 0) {                     // 冇 ATR 就退回用系統距離
+        useStop = px + (stop - entry);
+        useTgt  = px + (target - entry);
+    }
+    // 券商最小止蝕距離
+    double minDist = MarketInfo(g_sym, MODE_STOPLEVEL) * Point;
+    if (minDist > 0) {
+        if (MathAbs(px - useStop) < minDist)
+            useStop = (type == OP_BUY) ? px - minDist * 1.5 : px + minDist * 1.5;
+        if (MathAbs(useTgt - px) < minDist)
+            useTgt = (type == OP_BUY) ? px + minDist * 1.5 : px - minDist * 1.5;
+    }
+    useStop = NormalizeDouble(useStop, g_digits);
+    useTgt  = NormalizeDouble(useTgt, g_digits);
+
+    // ── 2026-11-03 安全校驗（極重要）──
+    // 用戶回報：做空單嘅 T/P 竟然喺入場價上方（3902.75 vs 3901.08），
+    // 咁樣一定到唔到目標，而止蝕會先觸發。任何方向錯嘅單一律拒送。
+    if (type == OP_SELL) {
+        if (useStop <= px) {
+            Print("❌ 拒絕落單：做空止蝕(", DoubleToString(useStop, g_digits),
+                  ") 必須高於入場(", DoubleToString(px, g_digits), ")");
+            Alert("TyLove：止蝕方向錯，已拒絕落單（訊號 #", sid, "）");
+            return;
+        }
+        if (useTgt >= px) {
+            Print("❌ 拒絕落單：做空目標(", DoubleToString(useTgt, g_digits),
+                  ") 必須低於入場(", DoubleToString(px, g_digits), ")");
+            Alert("TyLove：目標方向錯，已拒絕落單（訊號 #", sid, "）");
+            return;
+        }
+    } else {
+        if (useStop >= px) {
+            Print("❌ 拒絕落單：做多止蝕(", DoubleToString(useStop, g_digits),
+                  ") 必須低於入場(", DoubleToString(px, g_digits), ")");
+            Alert("TyLove：止蝕方向錯，已拒絕落單（訊號 #", sid, "）");
+            return;
+        }
+        if (useTgt <= px) {
+            Print("❌ 拒絕落單：做多目標(", DoubleToString(useTgt, g_digits),
+                  ") 必須高於入場(", DoubleToString(px, g_digits), ")");
+            Alert("TyLove：目標方向錯，已拒絕落單（訊號 #", sid, "）");
+            return;
+        }
+    }
+
+    // ── 落單 + 錯誤 129/138 重試 ──
+    int slip = 50;
+    int t = -1;
+    int lastErr = 0;
+    for (int attempt = 0; attempt < 4; attempt++) {
+        RefreshRates();
+        px = (type == OP_BUY) ? MarketInfo(g_sym, MODE_ASK) : MarketInfo(g_sym, MODE_BID);
+        t = OrderSend(g_sym, type, use, NormalizeDouble(px, g_digits), slip,
+                      useStop, useTgt, "TyLove#" + IntegerToString(sid), sid, 0,
+                      (type == OP_BUY) ? clrDodgerBlue : clrOrangeRed);
+        if (t >= 0) break;
+        lastErr = GetLastError();
+        Print("⚠️ 第 ", attempt + 1, "/4 次落單失敗 錯誤碼=", lastErr,
+              " 價格=", DoubleToString(px, g_digits), " 滑點=", slip,
+              " SL=", DoubleToString(useStop, g_digits),
+              " TP=", DoubleToString(useTgt, g_digits));
+        if (lastErr == 129 || lastErr == 138) {   // 價格已變 / 重新報價
+            slip += 100;
+            Sleep(800);
+            continue;
+        }
+        break;
+    }
+    if (t < 0) {
+        string hint = "";
+        if (lastErr == 130) hint = "（止蝕／目標距離太近）";
+        if (lastErr == 131) hint = "（手數無效）";
+        if (lastErr == 134) hint = "（保證金不足）";
+        if (lastErr == 129) hint = "（連續 4 次價格變動，市況太急）";
+        Print("❌ 落單放棄 錯誤碼=", lastErr, hint);
+        Alert("TyLove 落單失敗，錯誤碼 ", lastErr, hint, "\n訊號 #", sid, " 未執行");
+        return;                                    // 唔設 g_lastDoneId，下一輪再試
+    }
+
     g_lastDoneId = sid;
     Print("✅ 已落單 #", t, " 訊號#", sid, " ", dir, " ",
           DoubleToString(use, 2), " 手 @", DoubleToString(px, g_digits),
-          " SL=", DoubleToString(stop, g_digits),
-          " TP=", DoubleToString(target, g_digits));
-    Alert("TyLove 已落單：", dir, " ", DoubleToString(use, 2), " 手");
-    // 2026-11-02：通知後端「已執行」，令同一張訊號唔會再落第二次
+          " SL=", DoubleToString(useStop, g_digits),
+          " TP=", DoubleToString(useTgt, g_digits));
+    Alert("TyLove 已落單：", dir, " ", DoubleToString(use, 2), " 手 @",
+          DoubleToString(px, g_digits));
     Post("/api/gold/signal/executed",
          StringFormat("{\"id\":%d,\"ticket\":%d,\"price\":%s}",
                       sid, t, DoubleToString(px, g_digits)));
+}
+
+// 2026-11-03：通知後端「呢張訊號跳過」（過時／已到目標），避免網頁顯示「已批准未執行」
+void MarkSkipped(int sid, string why) {
+    Post("/api/gold/signal/skipped",
+         StringFormat("{\"id\":%d,\"why\":\"%s\"}", sid, why));
 }
 
 void CheckPending() {
@@ -408,6 +526,7 @@ void CheckPending() {
                 Print("   批准權已在 Telegram，繼續落單 #", sid);
             }
         }
+        g_lastObj = obj;   // 保存 JSON，DoTrade 要用 ATR
         DoTrade(sid, dir, entry, stop, target, lot);
     }
 }
@@ -465,6 +584,7 @@ int OnInit() {
 }
 
 bool PushFramesInitDone = false;
+string g_lastObj = "";   // 2026-11-03：最近一個訊號 JSON（DoTrade 要用 ATR）
 
 void OnTimer() {
     // 監測券商報價有冇停：TimeCurrent() 只會喺收到新報價時前進

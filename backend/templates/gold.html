@@ -68,6 +68,12 @@
   .wthumb{width:100%;height:52px;object-fit:cover;border-radius:7px;cursor:pointer;
     border:2px solid transparent;margin-bottom:5px}
   .wthumb.sel{border-color:#38BDF8}
+  .wcell{position:relative}
+  .wcell.sel .wthumb{border-color:#38BDF8}
+  .wdel{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;
+    border:none;background:rgba(239,68,68,.92);color:#fff;font-size:12px;
+    line-height:1;cursor:pointer;padding:0}
+  .wallpanel .panel{width:min(92vw,320px)}
   .wgrid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
 </style>
 </head>
@@ -90,7 +96,7 @@
   <div class="cd" id="clkCd">距 M15 收盤 <b>--:--</b></div>
   <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
     <span class="sub" id="clkDiff"></span>
-    <button class="tzbtn" id="btnTheme" onclick="toggleTheme()">🎨 背景</button>
+    <button class="tzbtn" id="btnTheme" onclick="openWallPanel()" title="背景圖 / 主題">🖼 背景圖</button>
   </div>
 </div>
 
@@ -1459,8 +1465,10 @@ async function noteDel(id){
 
   function tick(){
     const now = new Date();
-    // 轉成 UTC 毫秒（用本地時區偏移抵銷）
-    const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+    // 2026-11-05 修：getTime() 本身已係 UTC epoch，
+    // 再加 getTimezoneOffset()（香港 = -480）會變成減 8 小時，
+    // 令香港時鐘顯示 UTC（20:09 顯示成 12:09）。
+    const utcMs = now.getTime();
 
     const hkEl  = document.getElementById('clkHK');
     const srvEl = document.getElementById('clkSRV');
@@ -1498,7 +1506,23 @@ async function noteDel(id){
     document.querySelectorAll('.tzbtn[data-off]').forEach(b => {
       b.classList.toggle('on', Number(b.dataset.off) === srvOff);
     });
+    const el = document.getElementById('clkSRVOffset');
+    if (el) el.textContent = 'GMT+' + srvOff + (srvAuto ? ' ·自動' : '');
   }
+
+  // 2026-11-05：由 EA 自動回報伺服器時區（唔需要你手動撳 +2／+3）
+  let srvAuto = false;
+  async function loadTimeSync(){
+    try {
+      const d = await (await fetch('/api/gold/timesync')).json();
+      const tz = d && d.srv_tz;
+      if (tz !== null && tz !== undefined && Math.abs(Number(tz)) <= 14) {
+        srvAuto = true;
+        setSrvOffset(Math.round(Number(tz)));
+      }
+    } catch (e) { /* 唔阻主流程 */ }
+  }
+  loadTimeSync();
 
   // ---------- 背景 ----------
   function applyTheme(){
@@ -1512,14 +1536,14 @@ async function noteDel(id){
     if (theme === 'wall' && wall) {
       body.style.backgroundImage = 'url("/api/wallpapers/' +
         encodeURIComponent(wall) + '")';
-      body.style.background = '';   // 清掉舊值
-      body.style.backgroundImage = 'url("/api/wallpapers/' +
-        encodeURIComponent(wall) + '")';
     } else {
       body.style.backgroundImage = '';
     }
-    const btn = document.getElementById('btnTheme');
-    if (btn) btn.textContent = theme === 'off' ? '🎨 背景：關' : '🎨 背景：開';
+    // 2026-11-05：唔再改 btnTheme 文字（本身已寫「🖼 背景圖」），
+    // 只同步主題按鈕嘅選中狀態。
+    document.querySelectorAll('.tzbtn[data-th]').forEach(b => {
+      b.classList.toggle('on', b.dataset.th === theme);
+    });
   }
 
   window.toggleTheme = function(){
@@ -1533,9 +1557,9 @@ async function noteDel(id){
     localStorage.setItem(LS_WALL, name || '');
     localStorage.setItem(LS_THEME, name ? 'wall' : 'themed');
     applyTheme();
-    document.querySelectorAll('.wthumb').forEach(t => {
-      t.classList.toggle('sel', t.dataset.name === name);
-    });
+    loadWalls();   // 重繪選中狀態（縮圖已改為 .wcell 結構）
+    const msg = document.getElementById('wallMsg');
+    if (msg && name) msg.textContent = '已套用';
   };
 
   // ---------- 背景圖面板 ----------
@@ -1544,6 +1568,54 @@ async function noteDel(id){
     if (!p) return;
     p.classList.toggle('open');
     if (p.classList.contains('open')) loadWalls();
+  };
+
+  window.setTheme = function(th){
+    localStorage.setItem(LS_THEME, th);
+    applyTheme();
+    document.querySelectorAll('.tzbtn[data-th]').forEach(b => {
+      b.classList.toggle('on', b.dataset.th === th);
+    });
+  };
+
+  window.delWall = async function(name, ev){
+    if (ev) ev.stopPropagation();
+    if (!confirm('刪除呢張背景圖？')) return;
+    try {
+      const r = await fetch('/api/wallpapers/' + encodeURIComponent(name),
+                            {method: 'DELETE'});
+      const d = await r.json();
+      if (d.ok) {
+        if (localStorage.getItem(LS_WALL) === name) {
+          localStorage.setItem(LS_WALL, '');
+          localStorage.setItem(LS_THEME, 'themed');
+          applyTheme();
+        }
+        loadWalls();
+      } else {
+        alert('刪除失敗：' + (d.error || ''));
+      }
+    } catch (e) { alert('刪除失敗'); }
+  };
+
+  window.clearWalls = async function(){
+    if (!confirm('確定清空全部背景圖？（唔可以還原）')) return;
+    try {
+      const d0 = await (await fetch('/api/wallpapers')).json();
+      const files = d0.files || [];
+      let n = 0;
+      for (const f of files) {
+        const r = await fetch('/api/wallpapers/' + encodeURIComponent(f.name),
+                              {method: 'DELETE'});
+        if ((await r.json()).ok) n++;
+      }
+      localStorage.setItem(LS_WALL, '');
+      localStorage.setItem(LS_THEME, 'themed');
+      applyTheme();
+      loadWalls();
+      const msg = document.getElementById('wallMsg');
+      if (msg) msg.textContent = '已清空 ' + n + ' 張';
+    } catch (e) { alert('清空失敗'); }
   };
 
   window.loadWalls = async function(){
@@ -1555,20 +1627,25 @@ async function noteDel(id){
       const d = await (await fetch('/api/wallpapers')).json();
       const cur = localStorage.getItem(LS_WALL) || '';
       const files = d.files || [];
+      const cnt = document.getElementById('wallCount');
+      if (cnt) cnt.textContent = files.length;
+
       let h = '<div class="wgrid">';
-      h += '<img class="wthumb' + (cur ? '' : ' sel') + '" data-name="" ' +
-           'src="data:image/svg+xml;utf8,' +
-           encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="70"><rect width="120" height="70" fill="#0B1120"/><text x="60" y="40" fill="#475569" font-size="11" text-anchor="middle">預設</text></svg>') +
-           '" onclick="setWall(\'\')" title="預設">';
+      // 預設（無背景）
+      h += '<div class="wcell' + (cur ? '' : ' sel') + '" onclick="setWall(\'\')" title="預設">' +
+           '<div class="wthumb" style="background:#0B1120;display:flex;'
+           + 'align-items:center;justify-content:center;color:#475569;font-size:10px">預設</div>' +
+           '</div>';
       for (const f of files) {
-        h += '<img class="wthumb' + (f.name === cur ? ' sel' : '') +
-             '" data-name="' + f.name + '" src="/api/wallpapers/' +
-             encodeURIComponent(f.name) + '" onclick="setWall(\'' +
-             f.name + '\')" title="' + f.name + '">';
+        h += '<div class="wcell' + (f.name === cur ? ' sel' : '') + '" data-name="' + f.name + '">' +
+             '<img class="wthumb" src="/api/wallpapers/' + encodeURIComponent(f.name) + '" '
+             + 'onclick="setWall(\'' + f.name + '\')" title="' + f.name + '">' +
+             '<button class="wdel" onclick="delWall(\'' + f.name + '\', event)" title="刪除">×</button>' +
+             '</div>';
       }
       h += '</div>';
       if (!files.length) {
-        h += '<div class="text-[11px] text-slate-500 mt-2">仲未有背景圖，撳上面上傳。</div>';
+        h += '<div class="text-[11px] text-slate-500 mt-2">仲未有背景圖，撳上面藍色框上傳。</div>';
       }
       box.innerHTML = h;
     } catch (e) {
@@ -1587,7 +1664,12 @@ async function noteDel(id){
       const d = await r.json();
       if (msg) msg.textContent = d.ok ? ('已加 ' + (d.saved || []).length + ' 張') : '上傳失敗';
       input.value = '';
-      loadWalls();
+      // 第一次上傳就自動套用，免得用戶以為冇反應
+      if (d.ok && (d.saved || []).length && !localStorage.getItem(LS_WALL)) {
+        setWall(d.saved[0]);
+      } else {
+        loadWalls();
+      }
     } catch (e) {
       if (msg) msg.textContent = '上傳失敗';
     }
@@ -1623,23 +1705,45 @@ async function noteDel(id){
 <div class="wallpanel" id="wallPanel">
   <div class="panel">
     <div class="flex items-center justify-between mb-2">
-      <div class="text-xs font-semibold text-slate-200">🖼 背景圖庫</div>
-      <button onclick="openWallPanel()" style="color:#64748B;font-size:16px;line-height:1">×</button>
+      <div class="text-sm font-semibold text-slate-100">🖼 背景圖庫</div>
+      <button onclick="openWallPanel()" style="color:#64748B;font-size:18px;line-height:1">×</button>
     </div>
-    <label class="block mb-2">
-      <input type="file" accept="image/*" multiple onchange="uploadWalls(this)"
-             class="text-[11px] text-slate-400 w-full">
+
+    <!-- 主題 -->
+    <div class="text-[11px] text-slate-400 mb-1">主題</div>
+    <div class="flex gap-1.5 mb-3">
+      <button class="tzbtn on" data-th="themed" onclick="setTheme('themed')">🌙 暗夜</button>
+      <button class="tzbtn" data-th="off" onclick="setTheme('off')">🌅 暖光</button>
+      <button class="tzbtn" data-th="wall" onclick="setTheme('wall')">🖼 用背景</button>
+    </div>
+
+    <!-- 上傳（大而明顯）-->
+    <label for="wallFile"
+           class="block text-center py-3 mb-2 rounded-lg cursor-pointer"
+           style="border:1.5px dashed #38BDF8;background:rgba(56,189,248,.08);color:#7DD3FC">
+      <div style="font-size:22px;line-height:1.2">＋</div>
+      <div class="text-[11px] font-semibold">撳呢度上傳背景圖</div>
+      <div class="text-[10px] text-slate-400">可以一次揀多張（JPG / PNG）</div>
     </label>
-    <div id="wallMsg" class="text-[11px] text-slate-500 mb-2"></div>
+    <input type="file" id="wallFile" accept="image/*" multiple
+           onchange="uploadWalls(this)" style="display:none">
+    <div id="wallMsg" class="text-[11px] text-sky-300 mb-2"></div>
+
     <label class="flex items-center gap-2 text-[11px] text-slate-400 mb-2">
       <input type="checkbox" id="wallRotate" onchange="toggleRotate(this)"> 每 30 秒自動輪換
     </label>
+
+    <div class="flex items-center justify-between mb-1">
+      <div class="text-[11px] text-slate-400">圖庫（<span id="wallCount">0</span> 張）</div>
+      <button onclick="clearWalls()" class="text-[10px]" style="color:#F87171">全部清空</button>
+    </div>
     <div id="wallList" class="text-[11px] text-slate-500">載入中…</div>
+
     <div class="text-[10px] text-slate-600 mt-2 leading-relaxed">
-      圖片存喺 Railway volume，重新部署都唔會唔見。純裝飾，唔影響任何功能。
+      撳縮圖 = 套用；撳右上 × = 刪除。圖片存喺 Railway volume，重新部署都唔會唔見。
     </div>
   </div>
-  <button class="fab" onclick="openWallPanel()" title="背景圖">🖼</button>
+  <button class="fab" onclick="openWallPanel()" title="背景圖／主題">🖼</button>
 </div>
 
 </body>

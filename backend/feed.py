@@ -57,6 +57,9 @@ def init_db():
                 PRIMARY KEY (symbol, interval, ts)
             )""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_bar_lookup ON feed_bars(symbol, interval, ts)")
+        # 2026-11-05：EA 送嚟嘅伺服器時區（GMT+2／+3），用嚟自動對時
+        c.execute("CREATE TABLE IF NOT EXISTS feed_meta ("
+                  "k TEXT PRIMARY KEY, v TEXT, updated_at TEXT)")
 
 
 def _now_hk() -> datetime:
@@ -64,6 +67,25 @@ def _now_hk() -> datetime:
 
 
 # ------------------------------------------------------------------ 寫入
+def set_meta(k: str, v) -> None:
+    """寫入一個 meta 值（2026-11-05 加）。"""
+    init_db()
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO feed_meta(k, v, updated_at) VALUES(?,?,?)",
+                  (str(k), str(v), _now_hk().isoformat(timespec="seconds")))
+
+
+def get_meta(k: str, default=None):
+    """讀一個 meta 值。"""
+    try:
+        init_db()
+        with _conn() as c:
+            row = c.execute("SELECT v FROM feed_meta WHERE k=?", (str(k),)).fetchone()
+        return row["v"] if row else default
+    except Exception:  # noqa: BLE001
+        return default
+
+
 def save_tick(symbol: str, bid: float, ask: float, source: str = "mt4",
               tick_ts: str = None) -> dict:
     """收一個報價。"""

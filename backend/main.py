@@ -489,7 +489,33 @@ def gold_feed_tick():
             tick_ts=d.get("t"))
     except (KeyError, TypeError, ValueError) as exc:
         return jsonify({"ok": False, "error": f"格式唔啱：{exc}"}), 400
+    # 2026-11-05：EA 送嚟嘅伺服器時區（GMT+2／+3），存起做自動對時
+    try:
+        tz = d.get("tz")
+        if tz is not None:
+            tzf = float(tz)
+            if -12 <= tzf <= 14:
+                feed.set_meta("srv_tz", round(tzf, 1))
+    except (TypeError, ValueError):
+        pass
     return jsonify({"ok": True, **r})
+
+
+@app.route("/api/gold/timesync")
+def gold_timesync():
+    """伺服器時區（由 EA 自動回報）—— 2026-11-05 加。
+
+    用戶唔想手動撳 +2／+3，所以由 EA 每次推 tick 時附帶 tz，
+    呢度回傳最新值，前端時鐘自動套用。
+    """
+    import feed
+    tz = feed.get_meta("srv_tz")
+    try:
+        tzf = float(tz) if tz is not None else None
+    except (TypeError, ValueError):
+        tzf = None
+    return jsonify({"ok": True, "srv_tz": tzf,
+                    "now": now_hk().strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.route("/api/gold/bars", methods=["POST"])

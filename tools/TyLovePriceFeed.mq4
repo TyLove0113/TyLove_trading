@@ -22,7 +22,7 @@
 //  v1.0  2026-09-23  第一版
 //+------------------------------------------------------------------+
 #property copyright "TyLove"
-#property version   "2.33"
+#property version   "2.34"
 #property strict
 
 // 2026-11-02：半自動落單用嘅確認窗（要喺 MT4 開「允許 DLL 匯入」）
@@ -34,7 +34,7 @@ int MessageBoxW(int hWnd, string text, string caption, int type);
 #define MB_ICONQUESTION 32
 #define IDYES           6
 
-#define EA_VERSION "v2.8"
+#define EA_VERSION "v2.9"
 
 //================= 你只需要改呢兩行 =================
 extern string API_BASE         = "https://tylovetrading-production.up.railway.app";
@@ -182,8 +182,8 @@ void SendTick() {
     double ask = MarketInfo(g_sym, MODE_ASK);
     if (bid <= 0 || ask <= 0) return;
     string body = StringFormat(
-        "{\"symbol\":\"%s\",\"bid\":%s,\"ask\":%s,\"source\":\"mt4\",\"t\":%d,\"lag\":%d}",
-        g_sym, D2S(bid), D2S(ask), (int)TimeCurrent() - g_tzOffset, g_quoteLag);
+        "{\"symbol\":\"%s\",\"bid\":%s,\"ask\":%s,\"source\":\"mt4\",\"t\":%d,\"lag\":%d,\"tz\":%d}",
+        g_sym, D2S(bid), D2S(ask), (int)TimeCurrent() - g_tzOffset, g_quoteLag, (int)(g_tzOffset / 3600));
     if (Post("/api/gold/tick", body)) g_okTicks++;
 }
 

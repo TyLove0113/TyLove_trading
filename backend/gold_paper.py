@@ -29,6 +29,16 @@ TZ = ZoneInfo(config.HK_TZ)
 MAX_BARS = 80          # 20 小時內未觸發就作廢
 
 
+def _f(v):
+    """安全轉 float，失敗回 None（2026-11-05 加）。"""
+    try:
+        if v is None:
+            return None
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _now() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -86,8 +96,27 @@ def open_from_signal(g: dict) -> dict:
 
 
 def settle(df=None) -> dict:
-    """用後續 15 分鐘 K 線判定每張未平倉虛擬倉嘅輸贏。"""
+    """用後續 15 分鐘 K 線判定每張未平倉虛擬倉嘅輸贏。
+
+    2026-11-05：優先用 MT4 推上嚟嘅【現貨】K 線結算。
+    之前固定用 yfinance GC=F（期貨），同用戶喺 MT4 見到嘅現貨差約 28 美元，
+    令佢覺得「明明到咗目標但判輸」。而家：
+      · 有券商現貨 K 線 → 用現貨比較（entry / stop-off / target-off）
+      · 冇 → 退回期貨（entry_raw / stop / target），全部同一基準
+    """
     init_db()
+    src = "yf"
+    if df is None:
+        try:
+            import feed
+            _d = feed.bars(15, 2000)
+            if _d is not None and len(_d) >= 30:
+                # feed.bars() 回傳小寫 o/h/l/c，要轉成大寫對齊
+                df = _d.rename(columns={"o": "Open", "h": "High",
+                                        "l": "Low", "c": "Close"})
+                src = "mt4"
+        except Exception:  # noqa: BLE001
+            pass
     if df is None:
         import yfinance as yf
         df = yf.download("GC=F", period="10d", interval="15m",
@@ -114,23 +143,33 @@ def settle(df=None) -> dict:
                 still += 1
                 continue
             side = 1 if r["direction"] == "long" else -1
+            # 依數據源決定比較基準（見 docstring）
+            _off = (_f(r["entry_raw"]) or 0) - _f(r["entry"]) or 0
+            if src == "mt4":       # 現貨數據 → 全部轉現貨
+                _e = _f(r["entry"]) or 0
+                _s = (_f(r["stop"]) or 0) - _off
+                _t = (_f(r["target"]) or 0) - _off
+            else:                  # 期貨數據 → 全部用期貨
+                _e = _f(r["entry_raw"]) or 0
+                _s = _f(r["stop"]) or 0
+                _t = _f(r["target"]) or 0
             res = None
             for j in range(pos + 1, min(pos + 1 + MAX_BARS, len(idx))):
                 if side == 1:
-                    if lo[j] <= r["stop"]:
-                        res = ("loss", r["stop"], idx[j]); break
-                    if hi[j] >= r["target"]:
-                        res = ("win", r["target"], idx[j]); break
+                    if lo[j] <= _s:
+                        res = ("loss", _s, idx[j]); break
+                    if hi[j] >= _t:
+                        res = ("win", _t, idx[j]); break
                 else:
-                    if hi[j] >= r["stop"]:
-                        res = ("loss", r["stop"], idx[j]); break
-                    if lo[j] <= r["target"]:
-                        res = ("win", r["target"], idx[j]); break
+                    if hi[j] >= _s:
+                        res = ("loss", _s, idx[j]); break
+                    if lo[j] <= _t:
+                        res = ("win", _t, idx[j]); break
             if res is None:
                 still += 1
                 continue
             status, price, when = res
-            pnl_atr = (side * (price - r["entry_raw"]) / r["atr"]) if r["atr"] else 0.0
+            pnl_atr = (side * (price - _e) / r["atr"]) if r["atr"] else 0.0
             oz = 100.0 * float(r["lot"] or 0)
             c.execute(
                 "UPDATE gold_paper SET status=?, exit_ts=?, exit_price=?, "
@@ -169,9 +208,23 @@ def stats() -> dict:
     # 2026-11-02：加明細 + 時間分佈 —— 用戶質疑「30 筆 83.3%」係否造假。
     # 老實講：數字係真，但 30 筆若集中喺同一段單邊行情（例如金價連跌），
     # 做空全部贏 —— 統計上冇意義。所以同時列出方向同日期範圍。
+    # 2026-11-05：顯示改回「現貨等價」—— 用戶喺 MT4 睇現貨，
+    # 之前顯示期貨價（貴約 28 美元），令佢以為結算錯。
+    # 結算本身正確（比較期貨 vs 期貨），只係顯示時要轉返。
+    def _spot(r, v):
+        try:
+            off = (float(r["entry_raw"] or 0) - float(r["entry"] or 0))
+            return round(float(v) - off, 2) if v is not None else None
+        except Exception:  # noqa: BLE001
+            return v
+
     detail = [{"ts": r["signal_ts"], "dir": r["direction"],
-               "entry": r["entry"], "stop": r["stop"], "target": r["target"],
-               "status": r["status"], "pnl_atr": round(r["pnl_atr"] or 0, 2)}
+               "entry": round(float(r["entry"] or 0), 2),
+               "stop": _spot(r, r["stop"]), "target": _spot(r, r["target"]),
+               "status": r["status"], "pnl_atr": round(r["pnl_atr"] or 0, 2),
+               # 2026-11-05：加結束時間／價格 —— 用戶可以自己核對幾時觸及
+               "exit_ts": r["exit_ts"],
+               "exit_price": _spot(r, r["exit_price"])}
               for r in closed[-40:]]
     days = sorted({str(r["signal_ts"])[:10] for r in closed})
     dirs = {}

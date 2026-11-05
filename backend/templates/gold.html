@@ -10,9 +10,90 @@
   .card{background:#131C31;border:1px solid #1E2A44;border-radius:14px}
   .pos{color:#34D399}.neg{color:#F87171}
   .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px}
+
+  /* ===== 時鐘條（2026-11-05）===== */
+  .clockbar{position:sticky;top:0;z-index:40;display:flex;gap:20px;align-items:center;
+    flex-wrap:wrap;padding:9px 16px;margin-bottom:16px;border-radius:14px;
+    background:rgba(19,28,49,.82);border:1px solid #1E2A44;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  .clk{display:flex;align-items:baseline;gap:7px}
+  .clk .lbl{font-size:11px;color:#64748B;letter-spacing:.3px}
+  .clk .val{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:21px;font-weight:600;letter-spacing:.6px;font-variant-numeric:tabular-nums}
+  .clk .val.hk{color:#38BDF8;text-shadow:0 0 14px rgba(56,189,248,.35)}
+  .clk .val.srv{color:#FBBF24;text-shadow:0 0 14px rgba(251,191,36,.3)}
+  .clk .sub{font-size:10px;color:#475569}
+  .cd{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#94A3B8}
+  .cd b{color:#4ADE80}
+  .cd.warn b{color:#FBBF24}
+  .cd.hot b{color:#F87171}
+  .tzbtn{font-size:10px;padding:2px 7px;border-radius:6px;border:1px solid #334155;
+    color:#94A3B8;cursor:pointer;background:transparent}
+  .tzbtn.on{background:#1E3A5F;border-color:#38BDF8;color:#7DD3FC}
+
+  /* ===== 背景裝飾（可關）===== */
+  body.themed{position:relative}
+  body.themed::before{content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
+    background:
+      radial-gradient(900px 520px at 12% -8%, rgba(56,189,248,.16), transparent 62%),
+      radial-gradient(760px 460px at 92% 6%, rgba(168,85,247,.13), transparent 60%),
+      radial-gradient(700px 520px at 50% 108%, rgba(34,197,94,.09), transparent 62%),
+      #0B1120}
+  body.themed::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:linear-gradient(115deg,transparent 0 42%,rgba(255,255,255,.022) 46%,
+      transparent 50% 100%);
+    background-size:220% 220%;animation:drift 26s linear infinite}
+  @keyframes drift{0%{background-position:0% 0%}100%{background-position:220% 180%}}
+  @media (prefers-reduced-motion:reduce){body.themed::after{animation:none}}
+
+  /* 每個 section 唔同色調 */
+  body.themed .card{background:linear-gradient(180deg,#131C31 0%,#111A2C 100%)}
+  body.themed .card.tint-sky{border-color:#1B3A52;box-shadow:inset 0 1px 0 rgba(56,189,248,.08)}
+  body.themed .card.tint-violet{border-color:#2E2350}
+  body.themed .card.tint-emerald{border-color:#164034}
+
+  /* 背景圖 */
+  body.wall{background-size:cover !important;background-position:center !important;
+    background-attachment:fixed}
+  body.wall::before{opacity:.92}
+  .wallpanel{position:fixed;right:14px;bottom:14px;z-index:60}
+  .wallpanel .fab{width:46px;height:46px;border-radius:50%;border:1px solid #1E2A44;
+    background:rgba(19,28,49,.94);color:#94A3B8;font-size:19px;cursor:pointer;
+    backdrop-filter:blur(8px);box-shadow:0 8px 24px rgba(0,0,0,.45)}
+  .wallpanel .panel{position:absolute;right:0;bottom:56px;width:290px;max-height:64vh;
+    overflow:auto;display:none;padding:12px;border-radius:14px;
+    background:rgba(15,23,42,.97);border:1px solid #1E2A44;
+    box-shadow:0 16px 44px rgba(0,0,0,.55);backdrop-filter:blur(12px)}
+  .wallpanel.open .panel{display:block}
+  .wthumb{width:100%;height:52px;object-fit:cover;border-radius:7px;cursor:pointer;
+    border:2px solid transparent;margin-bottom:5px}
+  .wthumb.sel{border-color:#38BDF8}
+  .wgrid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
 </style>
 </head>
 <body class="p-4 md:p-8 max-w-5xl mx-auto">
+<!-- 雙時鐘（2026-11-05）—— 香港時間 vs XAUUSD 伺服器時間 -->
+<div class="clockbar">
+  <div class="clk">
+    <span class="lbl">🇭🇰 香港</span>
+    <span class="val hk" id="clkHK">--:--:--</span>
+  </div>
+  <div class="clk">
+    <span class="lbl">📈 XAUUSD</span>
+    <span class="val srv" id="clkSRV">--:--:--</span>
+    <span class="sub" id="clkSRVOffset">GMT+2</span>
+    <span style="display:inline-flex;gap:3px;margin-left:2px">
+      <button class="tzbtn" data-off="2" onclick="setSrvOffset(2)">+2</button>
+      <button class="tzbtn" data-off="3" onclick="setSrvOffset(3)">+3</button>
+    </span>
+  </div>
+  <div class="cd" id="clkCd">距 M15 收盤 <b>--:--</b></div>
+  <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+    <span class="sub" id="clkDiff"></span>
+    <button class="tzbtn" id="btnTheme" onclick="toggleTheme()">🎨 背景</button>
+  </div>
+</div>
+
 <!-- 資料庫持久化警告 + 備份（由 /api/db-status 更新） -->
 <div id="dbBar" class="hidden mb-4 px-4 py-3 rounded-xl text-sm leading-relaxed"></div>
 
@@ -643,7 +724,8 @@ async function loadPaper(){
         + '<tr class="text-slate-500"><th class="text-left py-1">訊號時間</th>'
         + '<th class="text-left">方向</th><th class="text-right">入場</th>'
         + '<th class="text-right">止蝕</th><th class="text-right">目標</th>'
-        + '<th class="text-left">結果</th><th class="text-right">R</th></tr></thead><tbody>';
+        + '<th class="text-left">結果</th><th class="text-left">結束（觸及）</th>'
+        + '<th class="text-right">R</th></tr></thead><tbody>';
       for (const r of recent) {
         const won = r.status === 'win';
         if (won) win++; else lose++;
@@ -655,6 +737,9 @@ async function loadPaper(){
           + `<td class="text-right">${Number(r.stop||0).toFixed(2)}</td>`
           + `<td class="text-right">${Number(r.target||0).toFixed(2)}</td>`
           + `<td style="color:${col}">${won ? '✅ 贏' : '❌ 輸'}</td>`
+          + `<td class="text-[10px] text-slate-400 whitespace-nowrap">`
+          +   `${r.exit_ts ? String(r.exit_ts).slice(5,16) + ' @' + Number(r.exit_price||0).toFixed(2) : '持倉中'}`
+          + `</td>`
           + `<td class="text-right" style="color:${col}">${(r.pnl_atr>0?'+':'') + Number(r.pnl_atr||0).toFixed(2)}</td></tr>`;
       }
       h += `</tbody></table></div>`;
@@ -1351,5 +1436,211 @@ async function noteDel(id){
   } catch (e) { /* 唔阻主流程 */ }
 })();
 </script>
+
+<script>
+// ==================== 雙時鐘 + 背景（2026-11-05）====================
+// 純顯示功能，完全唔影響交易邏輯。
+(function(){
+  const LS_OFF  = 'tylove_srv_offset';
+  const LS_THEME= 'tylove_theme';       // off | themed | wall
+  const LS_WALL = 'tylove_wall';        // 檔名
+  const LS_ROT  = 'tylove_wall_rotate'; // 0 | 1
+
+  let srvOff = parseFloat(localStorage.getItem(LS_OFF) || '2');
+  if (!(srvOff === 2 || srvOff === 3)) srvOff = 2;
+
+  const pad = n => String(n).padStart(2, '0');
+
+  function fmt(msUTC, offH){
+    const d = new Date(msUTC + offH * 3600 * 1000);
+    return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' +
+           pad(d.getUTCSeconds());
+  }
+
+  function tick(){
+    const now = new Date();
+    // 轉成 UTC 毫秒（用本地時區偏移抵銷）
+    const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+
+    const hkEl  = document.getElementById('clkHK');
+    const srvEl = document.getElementById('clkSRV');
+    const cdEl  = document.getElementById('clkCd');
+    const diffEl= document.getElementById('clkDiff');
+    if (!hkEl || !srvEl) return;
+
+    hkEl.textContent  = fmt(utcMs, 8);
+    srvEl.textContent = fmt(utcMs, srvOff);
+
+    // 距離 M15 收盤（用伺服器時間對齊，因為 K 線跟伺服器）
+    const srv = new Date(utcMs + srvOff * 3600 * 1000);
+    const mins = srv.getUTCMinutes(), secs = srv.getUTCSeconds();
+    const left = 15 * 60 - ((mins % 15) * 60 + secs);
+    const mm = Math.floor(left / 60), ss = left % 60;
+    cdEl.innerHTML = '距 M15 收盤 <b>' + pad(mm) + ':' + pad(ss) + '</b>';
+    cdEl.className = 'cd' + (left <= 60 ? ' hot' : (left <= 180 ? ' warn' : ''));
+
+    if (diffEl) {
+      const d = Math.abs(8 - srvOff);
+      diffEl.textContent = d ? ('差 ' + d + ' 小時') : '同步';
+    }
+  }
+
+  window.setSrvOffset = function(h){
+    srvOff = h;
+    localStorage.setItem(LS_OFF, String(h));
+    document.querySelectorAll('.tzbtn[data-off]').forEach(b => {
+      b.classList.toggle('on', Number(b.dataset.off) === h);
+    });
+    tick();
+  };
+
+  function markTz(){
+    document.querySelectorAll('.tzbtn[data-off]').forEach(b => {
+      b.classList.toggle('on', Number(b.dataset.off) === srvOff);
+    });
+  }
+
+  // ---------- 背景 ----------
+  function applyTheme(){
+    const theme = localStorage.getItem(LS_THEME) || 'themed';
+    const wall  = localStorage.getItem(LS_WALL) || '';
+    const body  = document.body;
+
+    body.classList.toggle('themed', theme === 'themed' || theme === 'wall');
+    body.classList.toggle('wall', theme === 'wall' && !!wall);
+
+    if (theme === 'wall' && wall) {
+      body.style.backgroundImage = 'url("/api/wallpapers/' +
+        encodeURIComponent(wall) + '")';
+      body.style.background = '';   // 清掉舊值
+      body.style.backgroundImage = 'url("/api/wallpapers/' +
+        encodeURIComponent(wall) + '")';
+    } else {
+      body.style.backgroundImage = '';
+    }
+    const btn = document.getElementById('btnTheme');
+    if (btn) btn.textContent = theme === 'off' ? '🎨 背景：關' : '🎨 背景：開';
+  }
+
+  window.toggleTheme = function(){
+    const cur = localStorage.getItem(LS_THEME) || 'themed';
+    const next = cur === 'off' ? 'themed' : 'off';
+    localStorage.setItem(LS_THEME, next);
+    applyTheme();
+  };
+
+  window.setWall = function(name){
+    localStorage.setItem(LS_WALL, name || '');
+    localStorage.setItem(LS_THEME, name ? 'wall' : 'themed');
+    applyTheme();
+    document.querySelectorAll('.wthumb').forEach(t => {
+      t.classList.toggle('sel', t.dataset.name === name);
+    });
+  };
+
+  // ---------- 背景圖面板 ----------
+  window.openWallPanel = function(){
+    const p = document.getElementById('wallPanel');
+    if (!p) return;
+    p.classList.toggle('open');
+    if (p.classList.contains('open')) loadWalls();
+  };
+
+  window.loadWalls = async function(){
+    const box = document.getElementById('wallList');
+    const rot = document.getElementById('wallRotate');
+    if (rot) rot.checked = localStorage.getItem(LS_ROT) === '1';
+    if (!box) return;
+    try {
+      const d = await (await fetch('/api/wallpapers')).json();
+      const cur = localStorage.getItem(LS_WALL) || '';
+      const files = d.files || [];
+      let h = '<div class="wgrid">';
+      h += '<img class="wthumb' + (cur ? '' : ' sel') + '" data-name="" ' +
+           'src="data:image/svg+xml;utf8,' +
+           encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="70"><rect width="120" height="70" fill="#0B1120"/><text x="60" y="40" fill="#475569" font-size="11" text-anchor="middle">預設</text></svg>') +
+           '" onclick="setWall(\'\')" title="預設">';
+      for (const f of files) {
+        h += '<img class="wthumb' + (f.name === cur ? ' sel' : '') +
+             '" data-name="' + f.name + '" src="/api/wallpapers/' +
+             encodeURIComponent(f.name) + '" onclick="setWall(\'' +
+             f.name + '\')" title="' + f.name + '">';
+      }
+      h += '</div>';
+      if (!files.length) {
+        h += '<div class="text-[11px] text-slate-500 mt-2">仲未有背景圖，撳上面上傳。</div>';
+      }
+      box.innerHTML = h;
+    } catch (e) {
+      box.innerHTML = '<div class="text-[11px] text-red-400">讀取失敗</div>';
+    }
+  };
+
+  window.uploadWalls = async function(input){
+    if (!input.files || !input.files.length) return;
+    const fd = new FormData();
+    for (const f of input.files) fd.append('image', f);
+    const msg = document.getElementById('wallMsg');
+    if (msg) msg.textContent = '上傳中…';
+    try {
+      const r = await fetch('/api/wallpapers', {method: 'POST', body: fd});
+      const d = await r.json();
+      if (msg) msg.textContent = d.ok ? ('已加 ' + (d.saved || []).length + ' 張') : '上傳失敗';
+      input.value = '';
+      loadWalls();
+    } catch (e) {
+      if (msg) msg.textContent = '上傳失敗';
+    }
+  };
+
+  window.toggleRotate = function(cb){
+    localStorage.setItem(LS_ROT, cb.checked ? '1' : '0');
+  };
+
+  // 每 30 秒自動換一張（如果開咗）
+  setInterval(async function(){
+    if (localStorage.getItem(LS_ROT) !== '1') return;
+    if (localStorage.getItem(LS_THEME) !== 'wall') return;
+    try {
+      const d = await (await fetch('/api/wallpapers')).json();
+      const files = d.files || [];
+      if (files.length < 2) return;
+      const cur = localStorage.getItem(LS_WALL) || '';
+      const idx = files.findIndex(f => f.name === cur);
+      const next = files[(idx + 1) % files.length].name;
+      localStorage.setItem(LS_WALL, next);
+      applyTheme();
+    } catch (e) { /* 靜靜咁算 */ }
+  }, 30000);
+
+  markTz();
+  applyTheme();
+  tick();
+  setInterval(tick, 250);
+})();
+</script>
+<!-- 背景圖面板（2026-11-05）-->
+<div class="wallpanel" id="wallPanel">
+  <div class="panel">
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-xs font-semibold text-slate-200">🖼 背景圖庫</div>
+      <button onclick="openWallPanel()" style="color:#64748B;font-size:16px;line-height:1">×</button>
+    </div>
+    <label class="block mb-2">
+      <input type="file" accept="image/*" multiple onchange="uploadWalls(this)"
+             class="text-[11px] text-slate-400 w-full">
+    </label>
+    <div id="wallMsg" class="text-[11px] text-slate-500 mb-2"></div>
+    <label class="flex items-center gap-2 text-[11px] text-slate-400 mb-2">
+      <input type="checkbox" id="wallRotate" onchange="toggleRotate(this)"> 每 30 秒自動輪換
+    </label>
+    <div id="wallList" class="text-[11px] text-slate-500">載入中…</div>
+    <div class="text-[10px] text-slate-600 mt-2 leading-relaxed">
+      圖片存喺 Railway volume，重新部署都唔會唔見。純裝飾，唔影響任何功能。
+    </div>
+  </div>
+  <button class="fab" onclick="openWallPanel()" title="背景圖">🖼</button>
+</div>
+
 </body>
 </html>

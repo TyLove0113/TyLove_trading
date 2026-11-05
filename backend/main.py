@@ -840,6 +840,75 @@ def gold_ocr():
         }), 200
 
 
+# ==================== 背景圖（wallpaper）2026-11-05 ====================
+_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def _wall_dir():
+    import os
+    base = os.path.dirname(os.path.abspath(config.DB_PATH))
+    d = os.path.join(base, "wallpapers")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+@app.route("/api/wallpapers", methods=["GET", "POST"])
+def api_wallpapers():
+    """背景圖庫 —— 上傳／列表（2026-11-05 加）。
+
+    純裝飾功能，唔會影響任何交易邏輯。圖片存喺 DB 同一個 volume
+    底下（wallpapers/），所以重新部署都唔會唔見。
+    """
+    import os
+    d = _wall_dir()
+    if request.method == "POST":
+        files = request.files.getlist("image") or request.files.getlist("images")
+        saved, skipped = [], []
+        for f in files:
+            if not f or not f.filename:
+                continue
+            ext = os.path.splitext(f.filename)[1].lower()
+            if ext not in _IMG_EXT:
+                skipped.append(f.filename)
+                continue
+            name = "%s%s" % (datetime.now(ZoneInfo(config.HK_TZ)).strftime(
+                "%Y%m%d-%H%M%S-%f"), ext)
+            f.save(os.path.join(d, name))
+            saved.append(name)
+        log.info("收到 %d 張背景圖（跳過 %d）", len(saved), len(skipped))
+        return jsonify({"ok": True, "saved": saved, "skipped": skipped,
+                        "total": len(_list_walls())})
+    return jsonify({"ok": True, "files": _list_walls()})
+
+
+def _list_walls():
+    import os
+    out = []
+    for n in sorted(os.listdir(_wall_dir()), reverse=True):
+        if os.path.splitext(n)[1].lower() in _IMG_EXT:
+            out.append({"name": n,
+                        "size": os.path.getsize(os.path.join(_wall_dir(), n))})
+    return out
+
+
+@app.route("/api/wallpapers/<path:name>", methods=["DELETE", "GET"])
+def api_wallpaper_one(name):
+    import os
+    from flask import send_from_directory
+    d = os.path.realpath(_wall_dir())
+    full = os.path.realpath(os.path.join(d, name))
+    if not full.startswith(d):
+        return jsonify({"ok": False, "error": "唔准"}), 403
+    if request.method == "DELETE":
+        if os.path.exists(full):
+            os.remove(full)
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "冇呢張圖"}), 404
+    if not os.path.exists(full):
+        return jsonify({"ok": False, "error": "冇呢張圖"}), 404
+    return send_from_directory(d, os.path.basename(full))
+
+
 @app.route("/api/gold/shot/<path:name>", methods=["GET"])
 def gold_shot(name):
     """睇返之前上載嘅截圖（限制喺 shots 目錄內）。"""

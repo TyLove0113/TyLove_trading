@@ -54,8 +54,40 @@
 
   /* 背景圖 */
   body.wall{background-size:cover !important;background-position:center !important;
-    background-attachment:fixed}
-  body.wall::before{opacity:.92}
+    background-attachment:fixed;--wall-veil:.55}
+  /* 2026-11-05：原本寫死 opacity:.92 —— 遮罩太厚，wallpaper 幾乎睇唔到。
+     改為由滑桿控制（--wall-veil 0–95%）。 */
+  body.wall::before{opacity:var(--wall-veil)}
+
+  /* ---------- 背景特效（可選）---------- */
+  body.wall[data-fx="vignette"]::after{content:"";position:fixed;inset:0;z-index:-1;
+    pointer-events:none;background:radial-gradient(ellipse at center,
+      transparent 45%,rgba(0,0,0,.65) 100%)}
+  body.wall[data-fx="blur"]{background-size:cover !important}
+  body.wall[data-fx="blur"]{filter:none}
+  body.wall[data-fx="blur"]::after{content:"";position:fixed;inset:0;z-index:-2;
+    pointer-events:none;backdrop-filter:blur(0px)}
+  body.wall[data-fx="glow"]::after{content:"";position:fixed;inset:0;z-index:-1;
+    pointer-events:none;
+    background:radial-gradient(circle at 20% 15%,rgba(56,189,248,.20),transparent 45%),
+               radial-gradient(circle at 80% 85%,rgba(139,92,246,.20),transparent 45%)}
+  body.wall[data-fx="zoom"]{animation:wallZoom 40s ease-in-out infinite alternate}
+  @keyframes wallZoom{from{background-size:100% auto}to{background-size:118% auto}}
+  body.wall[data-fx="grain"]::after{content:"";position:fixed;inset:0;z-index:-1;
+    pointer-events:none;opacity:.16;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='.55'/></svg>")}
+  @media (prefers-reduced-motion:reduce){body.wall[data-fx="zoom"]{animation:none}}
+
+  /* 亮度滑桿 */
+  .wallslider{width:100%;-webkit-appearance:none;height:4px;border-radius:2px;
+    background:#1E2A44;outline:none;margin:6px 0}
+  .wallslider::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;
+    border-radius:50%;background:#38BDF8;cursor:pointer;border:none}
+  .wallslider::-moz-range-thumb{width:16px;height:16px;border-radius:50%;
+    background:#38BDF8;cursor:pointer;border:none}
+  .fxbtn{padding:3px 8px;border-radius:6px;border:1px solid #1E2A44;
+    background:#131C31;color:#94A3B8;font-size:11px;cursor:pointer}
+  .fxbtn.on{background:#0C4A6E;border-color:#38BDF8;color:#E2E8F0}
   .wallpanel{position:fixed;right:14px;bottom:14px;z-index:60}
   .wallpanel .fab{width:46px;height:46px;border-radius:50%;border:1px solid #1E2A44;
     background:rgba(19,28,49,.94);color:#94A3B8;font-size:19px;cursor:pointer;
@@ -1449,6 +1481,8 @@ async function noteDel(id){
 (function(){
   const LS_OFF  = 'tylove_srv_offset';
   const LS_THEME= 'tylove_theme';       // off | themed | wall
+  const LS_VEIL = 'tylove_veil';        // 背景遮罩 0–95（2026-11-05）
+  const LS_FX   = 'tylove_fx';          // 背景特效
   const LS_WALL = 'tylove_wall';        // 檔名
   const LS_ROT  = 'tylove_wall_rotate'; // 0 | 1
 
@@ -1525,6 +1559,34 @@ async function noteDel(id){
   loadTimeSync();
 
   // ---------- 背景 ----------
+  // ---------- 背景亮度 / 特效（2026-11-05）----------
+  function applyVeil(){
+    const v = Number(localStorage.getItem(LS_VEIL) || 45);
+    document.body.style.setProperty('--wall-veil', (v / 100).toFixed(2));
+    const el = document.getElementById('veilRange');
+    if (el) el.value = v;
+    const lb = document.getElementById('veilVal');
+    if (lb) lb.textContent = v + '%';
+  }
+
+  function applyFx(){
+    const fx = localStorage.getItem(LS_FX) || 'none';
+    document.body.dataset.fx = fx;
+    document.querySelectorAll('.fxbtn[data-fx]').forEach(b => {
+      b.classList.toggle('on', b.dataset.fx === fx);
+    });
+  }
+
+  window.setVeil = function(v){
+    localStorage.setItem(LS_VEIL, String(v));
+    applyVeil();
+  };
+
+  window.setFx = function(fx){
+    localStorage.setItem(LS_FX, fx);
+    applyFx();
+  };
+
   function applyTheme(){
     const theme = localStorage.getItem(LS_THEME) || 'themed';
     const wall  = localStorage.getItem(LS_WALL) || '';
@@ -1539,6 +1601,9 @@ async function noteDel(id){
     } else {
       body.style.backgroundImage = '';
     }
+    // 2026-11-05：套用亮度同特效
+    applyVeil();
+    applyFx();
     // 2026-11-05：唔再改 btnTheme 文字（本身已寫「🖼 背景圖」），
     // 只同步主題按鈕嘅選中狀態。
     document.querySelectorAll('.tzbtn[data-th]').forEach(b => {
@@ -1715,6 +1780,29 @@ async function noteDel(id){
       <button class="tzbtn on" data-th="themed" onclick="setTheme('themed')">🌙 暗夜</button>
       <button class="tzbtn" data-th="off" onclick="setTheme('off')">🌅 暖光</button>
       <button class="tzbtn" data-th="wall" onclick="setTheme('wall')">🖼 用背景</button>
+    </div>
+
+    <!-- 亮度（遮罩厚度）2026-11-05 -->
+    <div class="mb-2">
+      <div class="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+        <span>☀️ 背景亮度</span>
+        <span id="veilVal" style="color:#7DD3FC">45%</span>
+      </div>
+      <input type="range" id="veilRange" class="wallslider" min="0" max="95" step="5"
+             value="45" oninput="setVeil(this.value)">
+      <div class="text-[10px] text-slate-500">數值細 = 背景更亮、字較難睇；數值大 = 背景更暗、字更清晰</div>
+    </div>
+
+    <!-- 特效 2026-11-05 -->
+    <div class="mb-2">
+      <div class="text-[11px] text-slate-400 mb-1">✨ 背景特效</div>
+      <div class="flex flex-wrap gap-1">
+        <button class="fxbtn" data-fx="none"     onclick="setFx('none')">無</button>
+        <button class="fxbtn" data-fx="vignette" onclick="setFx('vignette')">暗角</button>
+        <button class="fxbtn" data-fx="glow"     onclick="setFx('glow')">光暈</button>
+        <button class="fxbtn" data-fx="grain"    onclick="setFx('grain')">顆粒</button>
+        <button class="fxbtn" data-fx="zoom"     onclick="setFx('zoom')">緩慢縮放</button>
+      </div>
     </div>
 
     <!-- 上傳（大而明顯）-->

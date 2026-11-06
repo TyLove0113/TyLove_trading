@@ -385,6 +385,37 @@ def _hist_line(g: dict) -> str:
     return txt
 
 
+def fmt_heartbeat(h: dict) -> str:
+    """心跳訊息（2026-11-06 加）—— 只講系統狀態，唔出建議。"""
+    live = h.get("live_feed")
+    src = "券商真實報價（MT4）" if live else "期貨價（可能有偏差）"
+    lines = [
+        "💓 *系統正常運作*" if h.get("ok") else "⚠️ *系統有心跳但讀取異常*",
+        "⏰ %s（香港時間）" % h.get("time"),
+        "",
+    ]
+    price, hh, ll = h.get("price"), h.get("hh"), h.get("ll")
+    if price:
+        lines.append("💰 現價 *%s*" % price)
+    if hh and ll:
+        up = round(float(hh) - float(price), 2) if price else None
+        dn = round(float(price) - float(ll), 2) if price else None
+        lines.append("📏 區間 %s – %s" % (ll, hh))
+        if up is not None:
+            lines.append("　距上緣 %+.2f｜距下緣 %+.2f" % (up, dn))
+    lines.append("📊 今日訊號 *%s* 筆" % (h.get("today_trades") if h.get("today_trades") is not None else "—"))
+    lines.append("🟢 數據源：%s" % src)
+    age = h.get("bar_age_min")
+    if age is not None:
+        if age <= 30:
+            lines.append("　K 線 %0.1f 分鐘前更新 ✅" % float(age))
+        else:
+            lines.append("　⚠️ K 線已 %0.0f 分鐘冇更新 —— EA 可能停咗" % float(age))
+    lines.append("")
+    lines.append("─ 每 2 小時報一次；冇訊號即係價格仍然喺區間內 ─")
+    return "\n".join(lines)
+
+
 def fmt_gold_signal(g: dict) -> str:
     """黃金訊號通知（正式版：K 線已收盤）。"""
     if not g.get("has_signal"):

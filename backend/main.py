@@ -248,6 +248,7 @@ def scheduler_loop():
     last_monitor = 0.0
     last_gold = 0.0
     last_paper = 0.0
+    last_beat = time.time()   # 2026-11-06：心跳計時
 
     while True:
         try:
@@ -269,6 +270,15 @@ def scheduler_loop():
                         log.info("虛擬倉結算 %d 筆（獨立排程）", _pr["settled"])
                 except Exception:  # noqa: BLE001
                     log.exception("虛擬倉結算失敗（獨立排程）")
+
+            # 2026-11-06：心跳 —— 每 2 小時報一次系統狀態（純通知）
+            if time.time() - last_beat >= 7200:
+                last_beat = time.time()
+                try:
+                    import gold
+                    gold.heartbeat(push=True)
+                except Exception:  # noqa: BLE001
+                    log.exception("心跳失敗")
 
             hhmm = t.strftime("%H:%M")
             if hhmm in _schedule_targets() and hhmm not in fired:

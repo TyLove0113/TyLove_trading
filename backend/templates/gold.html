@@ -265,6 +265,13 @@
     <b>唔會落真單</b>，純粹幫你快速收集統計樣本。
     <span class="text-amber-400">虛擬結果會比真實樂觀（假設無滑點）。</span>
   </div>
+  <!-- 2026-11-06：A / B 分開睇（用戶要求唔好撈亂）-->
+  <div class="flex items-center gap-2 mb-2 flex-wrap">
+    <span class="text-[11px] text-slate-500">顯示：</span>
+    <button class="tzbtn on" data-pf="all" onclick="setPaperFilter('all')">全部</button>
+    <button class="tzbtn" data-pf="A" onclick="setPaperFilter('A')">🅰️ 首次突破</button>
+    <button class="tzbtn" data-pf="B" onclick="setPaperFilter('B')">🅱️ 趨勢延續（試）</button>
+  </div>
   <div id="paperBox" class="text-xs text-slate-400">載入中…</div>
 </div>
 
@@ -379,6 +386,15 @@
 
 // 2026-11-05：剪貼板粘貼的圖（FileList 唯讀，要另外存）
 var notePasted = [];
+// 2026-11-06：虛擬倉篩選（all | A | B）—— A = 首次突破、B = 趨勢延續
+var paperFilter = 'all';
+window.setPaperFilter = function(f){
+  paperFilter = f;
+  document.querySelectorAll('.tzbtn[data-pf]').forEach(b => {
+    b.classList.toggle('on', b.dataset.pf === f);
+  });
+  loadPaper();
+};
 
 // ================= 資料庫持久化 + 備份 =================
 async function loadDbStatus() {
@@ -769,11 +785,14 @@ async function loadPaper(){
             .map(([k,v]) => (k==='long'?'🟢多 ':'🔴空 ') + v).join('／') : '')
         + `</div>`;
     }
-    const recent = (d.recent || []).slice().reverse();
+    const allRecent = (d.recent || []).slice().reverse();
+    const recent = allRecent.filter(r => paperFilter === 'all'
+      || (r.strategy || 'A') === paperFilter);
     if (recent.length) {
       let win = 0, lose = 0;
       h += '<div class="overflow-x-auto"><table class="w-full text-[11px]"><thead>'
         + '<tr class="text-slate-500"><th class="text-left py-1">訊號時間</th>'
+        + '<th class="text-left">策略</th>'
         + '<th class="text-left">方向</th><th class="text-right">入場</th>'
         + '<th class="text-right">止蝕</th><th class="text-right">目標</th>'
         + '<th class="text-left">結果</th><th class="text-left">結束（觸及）</th>'
@@ -784,6 +803,9 @@ async function loadPaper(){
         const col = won ? '#4ade80' : '#f87171';
         h += `<tr class="border-t border-slate-800">`
           + `<td class="py-1 whitespace-nowrap">${r.ts || '—'}</td>`
+          + `<td class="whitespace-nowrap">${(r.strategy || 'A') === 'B'
+              ? '<span style="color:#FBBF24">🅱️ 延續</span>'
+              : '<span style="color:#38BDF8">🅰️ 突破</span>'}</td>`
           + `<td>${r.dir === 'long' ? '🟢 多' : '🔴 空'}</td>`
           + `<td class="text-right">${Number(r.entry||0).toFixed(2)}</td>`
           + `<td class="text-right">${Number(r.stop||0).toFixed(2)}</td>`

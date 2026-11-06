@@ -322,6 +322,9 @@ def evaluate(df: pd.DataFrame = None) -> dict:
         "live_feed": _live(),
         "data_age_min": round(
             (datetime.now(ZoneInfo(config.HK_TZ)) - t.to_pydatetime()).total_seconds() / 60, 1),
+        # 2026-11-06：區間上下緣（心跳同網頁都會用）
+        "hh": (round(float(last["hh"]), 2) if pd.notna(last["hh"]) else None),
+        "ll": (round(float(last["ll"]), 2) if pd.notna(last["ll"]) else None),
     }
 
     # ---- 訊號判斷 ----
@@ -504,6 +507,20 @@ def evaluate(df: pd.DataFrame = None) -> dict:
             atr, price, _bias)
     except Exception:  # noqa: BLE001
         log.debug("歷史對照查表失敗（唔阻訊號）", exc_info=True)
+
+    # 2026-11-06：趨勢延續 → 開「B 倉」虛擬記錄（用戶要求試跟車賺少少）
+    #   純記錄：唔推送 Telegram、唔落單、唔影響 A 策略。
+    #   定義：今支突破 + 上一支都突破（即非首次突破）= 趨勢延續。
+    cont_up = bool(broke_up and prev_up)
+    cont_dn = bool(broke_dn and prev_dn)
+    out["cont_up"] = cont_up
+    out["cont_dn"] = cont_dn
+    if cont_up or cont_dn:
+        try:
+            import gold_paper
+            gold_paper.open_cont(out, "long" if cont_up else "short", price, atr)
+        except Exception:  # noqa: BLE001
+            log.debug("B 倉記錄失敗（唔阻主流程）", exc_info=True)
     return out
 
 
@@ -765,6 +782,53 @@ def _signal_charts(bars: int = 60) -> list:
                     out.append(png)
         except Exception:  # noqa: BLE001
             log.debug("畫 M%d 圖失敗", mins, exc_info=True)
+    return out
+
+
+def heartbeat(push: bool = True) -> dict:
+    """心跳 —— 每 2 小時報一次系統狀態（2026-11-06 加）。
+
+    用戶反映「唔知系統 work 緊定死咗」。呢個只係通知，唔參與任何決策，
+    亦唔會影響訊號或落單。
+    """
+    import feed
+    t = datetime.now(ZoneInfo(config.HK_TZ))
+    out = {"time": t.strftime("%Y-%m-%d %H:%M"), "ok": True}
+    try:
+        st = feed.status()
+        out["feed_live"] = bool(st.get("live"))
+        out["bar_age_min"] = st.get("bar_age_min")
+        out["bars_count"] = st.get("bars_count")
+        tk = st.get("tick") or {}
+        out["tick_age_sec"] = st.get("tick_age_sec")
+    except Exception:  # noqa: BLE001
+        out["feed_live"] = False
+    try:
+        g = evaluate()   # 2026-11-06 修：evaluate() 冇 push 參數（push 係 early_alert 才有）
+        out["price"] = g.get("price")
+        out["hh"] = g.get("hh")
+        out["ll"] = g.get("ll")
+        out["today_trades"] = g.get("today_trades")
+        out["has_signal"] = g.get("has_signal")
+        out["data_symbol"] = g.get("data_symbol")
+        out["live_feed"] = g.get("live_feed")
+    except Exception:  # noqa: BLE001
+        log.exception("心跳讀取狀態失敗")
+        out["ok"] = False
+        # 2026-11-06：即使 K 線讀唔到，都用最新 tick 報價，唔好一片空白
+        try:
+            tk = feed.latest_tick() or {}
+            if tk.get("mid"):
+                out["price"] = round(float(tk["mid"]), 2)
+                out["price_from"] = "tick"
+        except Exception:  # noqa: BLE001
+            pass
+    if push:
+        try:
+            import notifier
+            notifier.push(notifier.fmt_heartbeat(out), channel="gold")
+        except Exception:  # noqa: BLE001
+            log.exception("心跳推送失敗")
     return out
 
 

@@ -165,7 +165,14 @@ GOLD_RISK_PCT = float(os.getenv("GOLD_RISK_PCT", "1.0"))
 #   真正問題：PF 喺樣本內外由 0.87 搖到 1.59，即策略本身冇穩定優勢。
 #   所以唔應該再喺噪音上面調參數 —— 應該累積實測數據再判斷。
 GOLD_BREAKOUT_BARS = int(os.getenv("GOLD_BREAKOUT_BARS", "20"))
-GOLD_STOP_ATR = float(os.getenv("GOLD_STOP_ATR", "1.0"))
+# 2026-11-06 改：1.0 → 2.4
+#   用戶實測發現：放寬一倍止蝕可以捱過假突破後嘅小幅反彈，
+#   係佢呢兩星期賺錢嘅主因。22.4 年數據驗證（36,031 個訊號）：
+#     止蝕 1.0 ATR → 勝率 27.4%、每筆 -0.080R
+#     止蝕 2.4 ATR → 勝率 43.9%、每筆 -0.031R   ← 改善 0.05R
+#   注意：目標保持 3.0 ATR，所以 RR 由 3.0 變 1.25。
+#   手數會自動按新止蝕距離縮小，風險金額不變。
+GOLD_STOP_ATR = float(os.getenv("GOLD_STOP_ATR", "2.4"))
 GOLD_TARGET_ATR = float(os.getenv("GOLD_TARGET_ATR", "3.0"))
 GOLD_MAX_TRADES_PER_DAY = int(os.getenv("GOLD_MAX_TRADES_PER_DAY", "3"))
 

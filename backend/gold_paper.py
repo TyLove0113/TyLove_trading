@@ -95,6 +95,51 @@ def open_from_signal(g: dict) -> dict:
         return {"opened": False, "why": "already opened"}
 
 
+def open_cont(g: dict, direction: str, price: float, atr: float,
+              stop_mult: float = 2.4, tgt_mult: float = 1.5) -> dict:
+    """趨勢延續虛擬倉（策略 B）—— 2026-11-06 加。
+
+    用戶要求：想試「跟車賺少少」，但唔可以影響現有 A 策略。
+    所以呢個獨立記錄：
+      · 只喺趨勢延續時開（價格已突破、仍然同向）
+      · 唔推送 Telegram、唔落單
+      · strategy='B'，網頁分開顯示
+      · 同一時間只保留一張 B 倉（避免連開幾十張）
+    """
+    if not price or not atr or atr <= 0:
+        return {"opened": False, "why": "no data"}
+    init_db()
+    try:
+        with _conn() as c:
+            busy = c.execute("SELECT COUNT(*) AS n FROM gold_paper "
+                             "WHERE status='open' AND strategy='B'").fetchone()["n"]
+            if busy:
+                return {"opened": False, "why": "already open"}
+    except sqlite3.Error:
+        return {"opened": False, "why": "db error"}
+
+    sd = float(stop_mult) * float(atr)
+    td = float(tgt_mult) * float(atr)
+    if direction == "long":
+        stop, tgt = price - sd, price + td
+    else:
+        stop, tgt = price + sd, price - td
+    ts = g.get("time")
+    try:
+        with _conn() as c:
+            c.execute(
+                "INSERT INTO gold_paper (signal_ts,direction,entry,entry_raw,stop,target,"
+                "atr,lot,risk_usd,strategy,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (str(ts), direction, float(price), float(price),
+                 round(stop, 2), round(tgt, 2), float(atr),
+                 config.GOLD_LOT_MIN, None, "B", _now()))
+            log.info("B 倉已開：%s %s @ %.2f 止%.2f 標%.2f",
+                     ts, direction, price, stop, tgt)
+            return {"opened": True}
+    except sqlite3.IntegrityError:
+        return {"opened": False, "why": "already opened"}
+
+
 def settle(df=None) -> dict:
     """用後續 15 分鐘 K 線判定每張未平倉虛擬倉嘅輸贏。
 
@@ -191,8 +236,12 @@ def stats() -> dict:
     closed = [r for r in rows if r["status"] in ("win", "loss")]
     n = len(closed)
     if not n:
+        # 2026-11-06：補齊所有欄位，否則網頁 JS 讀 recent 會報錯
         return {"open": len(rows) - n, "closed": 0, "win_rate": None,
-                "expectancy_atr": None, "total_atr": None, "by_strategy": {}}
+                "expectancy_atr": None, "total_atr": None, "by_strategy": {},
+                "first_day": None, "last_day": None, "span_days": 0,
+                "by_direction": {}, "latest_signal_at": None,
+                "open_now": len(rows) - n, "recent": []}
     w = sum(1 for r in closed if r["status"] == "win")
     tot = sum(r["pnl_atr"] or 0 for r in closed)
     by = {}
@@ -222,6 +271,8 @@ def stats() -> dict:
                "entry": round(float(r["entry"] or 0), 2),
                "stop": _spot(r, r["stop"]), "target": _spot(r, r["target"]),
                "status": r["status"], "pnl_atr": round(r["pnl_atr"] or 0, 2),
+               # 2026-11-06：A = 首次突破（現有）、B = 趨勢延續（新試）
+               "strategy": (r.get("strategy") or "A"),
                # 2026-11-05：加結束時間／價格 —— 用戶可以自己核對幾時觸及
                "exit_ts": r["exit_ts"],
                "exit_price": _spot(r, r["exit_price"])}

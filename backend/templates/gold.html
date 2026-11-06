@@ -100,6 +100,12 @@
   .wthumb{width:100%;height:52px;object-fit:cover;border-radius:7px;cursor:pointer;
     border:2px solid transparent;margin-bottom:5px}
   .wthumb.sel{border-color:#38BDF8}
+  .pastezone{padding:8px 10px;border:1.5px dashed #475569;border-radius:8px;
+    font-size:11px;color:#94A3B8;cursor:pointer;outline:none;transition:.15s}
+  .pastezone:hover{border-color:#64748B;color:#CBD5E1}
+  .pastezone:focus{border-color:#38BDF8;color:#7DD3FC;background:rgba(56,189,248,.07)}
+  .pastezone.ok{border-color:#22C55E;color:#86EFAC;background:rgba(34,197,94,.08)}
+  .pthumb{width:64px;height:44px;object-fit:cover;border-radius:5px;border:1px solid #334155}
   .wcell{position:relative}
   .wcell.sel .wthumb{border-color:#38BDF8}
   .wdel{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;
@@ -355,6 +361,10 @@
       <span id="ocrMsg" class="text-xs text-slate-400"></span>
       <span id="ocrStat" class="text-xs"></span>
     </div>
+    <!-- 2026-11-05：電腦版用家 screencap 後可直接 Ctrl+V 粘貼 -->
+    <div id="ocrPaste" tabindex="0" class="pastezone mt-2">
+      📋 或者：<b>點一下呢個框，再按 Ctrl+V</b> 直接粘貼截圖（唔需要存檔）
+    </div>
     <div class="text-[11px] text-slate-500 mt-1.5">
       讀到嘅數字會開一張「草稿」—— <b>唔會直接入帳</b>，你核對完撳「✅ 確認入帳」先算。
     </div>
@@ -366,6 +376,9 @@
 </div>
 
 <script>
+
+// 2026-11-05：剪貼板粘貼的圖（FileList 唯讀，要另外存）
+var notePasted = [];
 
 // ================= 資料庫持久化 + 備份 =================
 async function loadDbStatus() {
@@ -599,7 +612,8 @@ async function jOcrStatus(){
 }
 
 async function jOcr(input){
-  const f = input.files && input.files[0];
+  // 2026-11-05：支援直接傳 File（剪貼板粘貼用），亦支援原本嘅 <input>
+  const f = (input instanceof File) ? input : (input && input.files && input.files[0]);
   if (!f) return;
   const msg = $('ocrMsg');
   msg.textContent = '🔍 解讀中…（第一次會慢少少）';
@@ -1396,6 +1410,9 @@ async function pushGSettings(payload, okMsg){
       💾 儲存日記</button>
     <span id="noteMsg" class="muted" style="font-size:12px"></span>
   </div>
+  <div id="notePaste" tabindex="0" class="pastezone" style="margin-top:8px">
+    📋 或者：<b>點一下呢個框，再按 Ctrl+V</b> 直接粘貼截圖（會連埋上面文字一齊存）
+  </div>
   <div id="notePreview"></div>
   <div id="noteList" style="margin-top:12px"></div>
 </div>
@@ -1403,18 +1420,21 @@ async function pushGSettings(payload, okMsg){
 async function noteSave(){
   const body = $('noteBody').value.trim();
   const files = $('noteImg').files;
-  if (!body && (!files || !files.length)) { $('noteMsg').textContent = '❌ 冇內容'; return; }
-  $('noteMsg').textContent = '儲存中…（' + (files ? files.length : 0) + ' 張圖）';
+  const picked = files ? Array.from(files) : [];
+  const allImgs = picked.concat(notePasted);
+  if (!body && !allImgs.length) { $('noteMsg').textContent = '❌ 冇內容'; return; }
+  $('noteMsg').textContent = '儲存中…（' + allImgs.length + ' 張圖）';
   try {
     const fd = new FormData();
     fd.append('body', body);
     // 2026-10-08：支援一次過上載多張（M15／H1／MT4 各一張）
-    if (files) { for (let i = 0; i < files.length; i++) fd.append('image', files[i]); }
+    for (const f of allImgs) fd.append('image', f);
     const r = await fetch('/api/gold/notes', {method:'POST', body: fd,
       signal: AbortSignal.timeout(60000)});
     const d = await r.json();
     if (!d.ok) { $('noteMsg').textContent = '❌ ' + (d.error || '失敗'); return; }
-    $('noteBody').value = ''; $('noteImg').value = ''; notePreview();
+    $('noteBody').value = ''; $('noteImg').value = '';
+    notePasted = []; notePreview();
     $('noteMsg').textContent = '✅ 已儲存（' + (d.saved_images || 0) + ' 張圖）';
     noteList(d.notes);
   } catch (e) {
@@ -1424,12 +1444,25 @@ async function noteSave(){
 
 function notePreview(){
   const fs = $('noteImg').files, box = $('notePreview');
-  if (!fs || !fs.length) { box.innerHTML = ''; return; }
+  const picked = fs ? Array.from(fs) : [];
+  const all = picked.concat(notePasted);
+  if (!all.length) { box.innerHTML = ''; return; }
   box.innerHTML = '<div class="muted" style="font-size:12px;margin-top:6px">已揀 '
-    + fs.length + ' 張：'
-    + Array.from(fs).map(f => f.name.replace(/&/g,'&amp;').replace(/</g,'&lt;')).join('、')
-    + '</div>';
+    + all.length + ' 張：</div>'
+    + '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">'
+    + all.map((f, i) => `<img class="pthumb" src="${URL.createObjectURL(f)}"
+        title="${f.name || '粘貼'}${i >= picked.length ? '（粘貼）' : ''}">`).join('')
+    + '</div>'
+    + (notePasted.length
+        ? `<div class="muted" style="font-size:11px;margin-top:3px">其中 ${notePasted.length} 張係粘貼
+           <button onclick="noteClearPasted()" style="margin-left:6px;color:#f87171;background:none;border:none;cursor:pointer;font-size:11px">清除粘貼</button></div>`
+        : '');
 }
+
+window.noteClearPasted = function(){
+  notePasted = [];
+  notePreview();
+};
 
 function noteList(ns){
   const box = $('noteList');
@@ -1759,6 +1792,69 @@ async function noteDel(id){
       applyTheme();
     } catch (e) { /* 靜靜咁算 */ }
   }, 30000);
+
+  // ============ 2026-11-05：剪貼板粘貼（電腦版用家 screencap 後 Ctrl+V）============
+  function clipImage(e){
+    const dt = (e.clipboardData || window.clipboardData);
+    if (!dt) return null;
+    const items = dt.items || [];
+    for (const it of items) {
+      if (it.kind === 'file' && it.type && it.type.indexOf('image/') === 0) {
+        return it.getAsFile();
+      }
+    }
+    // 後備：某些瀏覽器 items 冇 file，用 files
+    const fs = dt.files;
+    if (fs && fs.length) {
+      for (const f of fs) if (f.type && f.type.indexOf('image/') === 0) return f;
+    }
+    return null;
+  }
+
+  function flashZone(el, txt){
+    if (!el) return;
+    const old = el.dataset.orig || el.innerHTML;
+    el.dataset.orig = old;
+    el.classList.add('ok');
+    el.textContent = txt;
+    setTimeout(() => {
+      el.classList.remove('ok');
+      el.innerHTML = old;
+      delete el.dataset.orig;
+    }, 2600);
+  }
+
+  // OCR 區：粘貼 → 直接送去讀
+  const op = document.getElementById('ocrPaste');
+  if (op) {
+    op.addEventListener('paste', async (e) => {
+      const f = clipImage(e);
+      if (!f) return;
+      e.preventDefault();
+      flashZone(op, '⏳ 已收到截圖，讀取中…');
+      try { await jOcr(f); } catch (err) { /* jOcr 自己會顯示錯誤 */ }
+      setTimeout(() => { if (op.dataset.orig) { op.classList.remove('ok');
+        op.innerHTML = op.dataset.orig; delete op.dataset.orig; } }, 1200);
+    });
+    op.addEventListener('click', () => op.focus());
+  }
+
+  // 日誌區：粘貼 → 加入待存圖片
+  const np = document.getElementById('notePaste');
+  if (np) {
+    np.addEventListener('paste', (e) => {
+      const f = clipImage(e);
+      if (!f) return;
+      e.preventDefault();
+      const now = new Date();
+      const stamp = now.getHours() + '-' + String(now.getMinutes()).padStart(2,'0');
+      notePasted.push(f.name ? f : new File([f], 'paste-' + stamp + '.png',
+                                           {type: f.type || 'image/png'}));
+      notePreview();
+      flashZone(np, '✅ 已粘貼 ' + notePasted.length + ' 張，記住撳「💾 儲存日記」');
+    });
+    np.addEventListener('click', () => np.focus());
+  }
 
   markTz();
   applyTheme();

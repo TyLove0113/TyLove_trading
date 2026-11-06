@@ -71,6 +71,11 @@ _TYPE = {"buy": "long", "sell": "short", "買": "long", "賣": "short"}
 
 
 
+_HDR_WORDS = {
+    "order", "time", "type", "size", "symbol", "price", "commission",
+    "swap", "profit", "balance", "equity", "margin", "free", "level",
+    "s/l", "t/p", "open", "close", "pending", "comment",
+}
 _RE_TICKET = re.compile(r"^\d{9,10}$")
 _RE_DATE = re.compile(r"(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})")
 _RE_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
@@ -348,8 +353,11 @@ def _rows(data) -> list[dict]:
                 types.append(_TYPE.get(txt.strip().lower().replace(" ", ""), None))
             elif k == "lots" and "lots" not in got:
                 got["lots"] = _num(txt)
-            elif k == "symbol" and txt.isupper() and "symbol" not in got:
-                got["symbol"] = txt
+            elif k == "symbol" and "symbol" not in got and txt.strip().lower() not in _HDR_WORDS:
+                # 2026-11-05：電腦版 MT4 顯示品種係細寫（xauusd），
+                # 原本要求 isupper() 會漏咗 → symbol 變空。
+                # 改為一律轉大寫，並排除表頭字（Order/Time/Type…）。
+                got["symbol"] = txt.strip().upper()
             elif k == "price":
                 prices.append(_num(txt))
             elif k == "small":

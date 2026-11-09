@@ -861,26 +861,35 @@ def approve_signal(sid: int, ok: bool = True) -> bool:
 
 
 def approved_signals(max_age_min: int = 30) -> list:
-    """已批准但未執行嘅訊號 —— 畀 EA 輪詢。"""
+    """已批准但未執行嘅訊號 —— 畀 EA 輪詢。
+
+    2026-11-06 修（用戶反映「撳咗批准但大多數時間漏單」）：
+      舊版用【訊號時間 ts】計 age，所以訊號出咗 40 分鐘之後你才撳批准，
+      age 已經 40 > max_age → 直接被丟棄 → EA 永遠領取唔到 → 漏單。
+      改為用【批准時間 approved_at】計 age，即係「你撳批准之後幾久」。
+      訊號本身太舊嘅保護改由 EA 嘅 DoTrade 做（價格已到目標／偏離太遠會跳過）。
+    """
     init_db()
     with _conn() as c:
         rows = c.execute("SELECT * FROM gold_signals "
                          "WHERE approved_at IS NOT NULL AND executed_at IS NULL "
-                         "ORDER BY id ASC LIMIT 5").fetchall()
+                         "ORDER BY approved_at ASC LIMIT 10").fetchall()
     now = datetime.now(ZoneInfo(config.HK_TZ))
     out = []
     for r in rows:
         try:
-            t = datetime.strptime(str(r["ts"])[:16], "%Y-%m-%d %H:%M").replace(
+            a = str(r["approved_at"])[:19].replace("T", " ")
+            t = datetime.strptime(a, "%Y-%m-%d %H:%M:%S").replace(
                 tzinfo=ZoneInfo(config.HK_TZ))
             age = (now - t).total_seconds() / 60
         except Exception:  # noqa: BLE001
-            age = 0
+            age = 0.0
         if max_age_min and age > max_age_min:
             continue
         out.append({"id": r["id"], "ts": r["ts"], "direction": r["direction"],
                     "entry": r["entry"], "stop": r["stop"], "target": r["target"],
-                    "lot": r["lot"], "age_min": round(age, 1)})
+                    "lot": r["lot"], "age_min": round(age, 1),
+                    "approved_age_min": round(age, 1)})
     return out
 
 

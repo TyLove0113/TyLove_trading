@@ -139,6 +139,9 @@ TRAIL_ATR_MULT = 1.5        # 移動止蝕：最高價 − 1.5 × ATR
 SCAN_TIMES = os.getenv("SCAN_TIMES", "09:25,10:30,11:30,14:00").split(",")
 MONITOR_INTERVAL_MIN = int(os.getenv("MONITOR_INTERVAL_MIN", "15"))
 CLOSE_REMINDER_TIME = os.getenv("CLOSE_REMINDER_TIME", "15:50")
+# 每日觀察記錄（2026-11-09 加）—— 對應「今日有冇明顯方向」練習
+#   收市前 10 分鐘記錄當日，並推送 Telegram。
+GOLD_OBSERVE_TIME = os.getenv("GOLD_OBSERVE_TIME", "23:50")
 
 # ---------------------------------------------------------------- 黃金 XAU/USD
 # 數據源用 GC=F（COMEX 黃金期貨）：yfinance 冇 XAUUSD 現貨代號，

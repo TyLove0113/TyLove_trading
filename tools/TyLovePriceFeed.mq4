@@ -22,7 +22,7 @@
 //  v1.0  2026-09-23  第一版
 //+------------------------------------------------------------------+
 #property copyright "TyLove"
-#property version   "2.34"
+#property version   "2.35"
 #property strict
 
 // 2026-11-02：半自動落單用嘅確認窗（要喺 MT4 開「允許 DLL 匯入」）
@@ -34,7 +34,7 @@ int MessageBoxW(int hWnd, string text, string caption, int type);
 #define MB_ICONQUESTION 32
 #define IDYES           6
 
-#define EA_VERSION "v2.9"
+#define EA_VERSION "v3.0"
 
 //================= 你只需要改呢兩行 =================
 extern string API_BASE         = "https://tylovetrading-production.up.railway.app";
@@ -46,7 +46,10 @@ extern int    TickSeconds      = 5;    // 每幾秒推一次即時報價
 extern bool   AllowAutoTrade   = true;   // 開關：允許 EA 幫你落單（只限 demo）
 extern bool   ConfirmEach      = false;  // 2026-11-03 預設 false：改由 Telegram 撳「是」批准
 extern double MaxAutoLot       = 0.01;   // 自動落單手數上限（安全網）
-extern int    AutoEveryMin     = 1;      // 每幾分鐘查一次有冇新訊號
+// 2026-11-06：由「每 1 分鐘」改為「每 15 秒」—— 用戶反映撳批准後反應太慢。
+// OnTimer 每 TickSeconds（5 秒）跑一次，所以 15 秒 = 每 3 次 tick 查一次。
+extern int    AutoEverySec     = 15;     // 每幾秒查一次有冇已批准訊號
+extern int    MaxApproveAgeMin = 5;      // 批准後超過幾分鐘就唔再落單（2026-11-06 加）
 extern int    AutoMaxAgeMin    = 30;     // 訊號超過幾多分鐘就唔再落（2026-11-03：10→30，同後端一致）
 extern int    BarMinutes       = 15;   // K 線週期（分鐘）
 extern string PushFrames       = "M1,M15,H1,H4"; // 多時框（2026-11-03 改預設）；留空 = 只用 BarMinutes
@@ -310,6 +313,16 @@ void DoTrade(int sid, string dir, double entry, double stop, double target, doub
         Print("⚠️ 唔係 demo 帳戶 —— 為安全起見拒絕自動落單");
         return;
     }
+    // 2026-11-06：批准時效檢查 —— 15 秒輪詢下正常 15 秒內就會領取。
+    // 如果批准後超過 MaxApproveAgeMin 分鐘仍未落單，通常係 EA 曾斷線／Railway 有問題，
+    // 呢個時候價格已經偏離，硬落單反而危險。跳過並通知。
+    double apAge = StringToDouble(JVal(g_lastObj, "approved_age_min"));
+    if (apAge > MaxApproveAgeMin) {
+        Print("⏭ 訊號 #", sid, " 批准後已 ", DoubleToString(apAge, 1),
+              " 分鐘（上限 ", MaxApproveAgeMin, "）—— 價格已偏離，跳過");
+        MarkSkipped(sid, "approve_too_old");
+        return;
+    }
     double use = MathMin(lot, MaxAutoLot);
     if (use < MarketInfo(g_sym, MODE_MINLOT)) use = MarketInfo(g_sym, MODE_MINLOT);
     if (use > MarketInfo(g_sym, MODE_MAXLOT)) use = MarketInfo(g_sym, MODE_MAXLOT);
@@ -456,7 +469,7 @@ void MarkSkipped(int sid, string why) {
 
 void CheckPending() {
     if (!AllowAutoTrade) return;
-    if (TimeLocal() - g_lastAutoCheck < AutoEveryMin * 60) return;
+    if (TimeLocal() - g_lastAutoCheck < AutoEverySec) return;
     g_lastAutoCheck = TimeLocal();
 
     // 2026-11-02：改為查「Telegram 已批准」嘅訊號。
@@ -475,7 +488,7 @@ void CheckPending() {
         quietCnt++;
         if (quietCnt % 20 == 1)
             Print("已批准訊號：暫時冇（EA 正常輪詢中，每 ",
-                  AutoEveryMin, " 分鐘一次）");
+                  AutoEverySec, " 秒一次）");
         return;
     }
     quietCnt = 0;
@@ -491,7 +504,11 @@ void CheckPending() {
         p = StringFind(js, "{\"id\":", e);
 
         int sid = (int)StringToInteger(JVal(obj, "id"));
-        if (sid <= 0 || sid <= g_lastDoneId) continue;
+        // 2026-11-06：移除 sid <= g_lastDoneId 嘅阻擋。
+        //   舊版：訊號 #140 成功後，#139 遲咗批准 → 139 <= 140 → 永久跳過（漏單）。
+        //   重複落單嘅保護已由後端 executed_at 負責（落單後 POST /executed，
+        //   之後 approved 端點就唔會再回傳同一張）。
+        if (sid <= 0) continue;
         string dir = JVal(obj, "direction");
         double entry  = StringToDouble(JVal(obj, "entry"));
         double stop   = StringToDouble(JVal(obj, "stop"));

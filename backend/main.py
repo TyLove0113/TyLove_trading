@@ -223,12 +223,24 @@ def job_close_reminder():
         log.exception("收市提醒失敗")
 
 
+def job_observe():
+    """每日觀察記錄（2026-11-09 加）—— 純記錄 + 推送。"""
+    try:
+        import gold_observe
+        r = gold_observe.record_day(push=True)
+        log.info("每日觀察：%s", r)
+    except Exception:  # noqa: BLE001
+        log.exception("每日觀察記錄失敗")
+
+
 def _schedule_targets() -> list:
     """今日所有要觸發嘅時間點（香港時間 HH:MM）。"""
     out = [t.strip() for t in SCAN_TIMES if t.strip()]
     out.append(CLOSE_REMINDER_TIME.strip())
     if config.HEARTBEAT_TIME:
         out.append(config.HEARTBEAT_TIME)
+    if getattr(config, "GOLD_OBSERVE_TIME", ""):
+        out.append(config.GOLD_OBSERVE_TIME.strip())
     return out
 
 
@@ -287,6 +299,8 @@ def scheduler_loop():
                     threading.Thread(target=job_heartbeat, daemon=True).start()
                 elif hhmm == CLOSE_REMINDER_TIME.strip():
                     threading.Thread(target=job_close_reminder, daemon=True).start()
+                elif hhmm == getattr(config, "GOLD_OBSERVE_TIME", "").strip():
+                    threading.Thread(target=job_observe, daemon=True).start()
                 else:
                     threading.Thread(target=job_open_scan, daemon=True).start()
 
@@ -1143,6 +1157,77 @@ def hk_corr_api():
     """港股相關性表（2026-11-05 加）—— 純參考，唔影響選股。"""
     import hk_risk
     return jsonify(hk_risk.summary())
+
+
+@app.route("/api/gold/observe", methods=["GET", "POST"])
+def gold_observe_api():
+    """每日觀察記錄（2026-11-09 加）—— 對應「今日有冇明顯方向」練習。"""
+    import gold_observe
+    if request.method == "POST":
+        d = request.get_json(silent=True) or {}
+        if d.get("backfill"):
+            return jsonify(gold_observe.backfill(int(d.get("days") or 30)))
+        return jsonify(gold_observe.record_day(d.get("date"), push=False))
+    try:
+        limit = int(request.args.get("limit", 60))
+    except Exception:  # noqa: BLE001
+        limit = 60
+    return jsonify(gold_observe.all_rows(limit))
+
+
+@app.route("/api/gold/signals/history")
+def gold_signals_history():
+    """歷史訊號回溯（2026-11-09 加）。
+
+    用戶問「可唔可以 trace-back 之前嘅訊號」—— 可以：
+    gold_signals 存咗全部訊號，gold_paper 存咗對應結果（贏／輸／持倉中）。
+    兩者用 (訊號時間, 方向) 對應。
+    """
+    import gold
+    gold.init_db()
+    try:
+        limit = int(request.args.get("limit", 200))
+    except Exception:  # noqa: BLE001
+        limit = 200
+    limit = max(1, min(limit, 2000))
+
+    with gold._conn() as c:
+        sigs = [dict(r) for r in c.execute(
+            "SELECT id,ts,direction,entry,stop,target,atr,lot,risk_usd,"
+            "approved_at,executed_at FROM gold_signals ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()]
+        try:
+            papers = {f"{r['signal_ts']}|{r['direction']}": dict(r)
+                      for r in c.execute(
+                          "SELECT signal_ts,direction,status,exit_ts,exit_price,"
+                          "pnl_atr,strategy FROM gold_paper").fetchall()}
+        except Exception:  # noqa: BLE001
+            papers = {}
+
+    out = []
+    for s in sigs:
+        k = f"{str(s['ts'])[:16]}|{s['direction']}"
+        pp = papers.get(k) or {}
+        out.append({
+            "id": s["id"], "ts": s["ts"], "dir": s["direction"],
+            "entry": s["entry"], "stop": s["stop"], "target": s["target"],
+            "atr": s["atr"], "lot": s["lot"],
+            "result": pp.get("status") or "未結算",
+            "pnl_atr": pp.get("pnl_atr"),
+            "exit_ts": pp.get("exit_ts"),
+            "exit_price": pp.get("exit_price"),
+            "strategy": pp.get("strategy") or "A",
+        })
+    n = len(out)
+    win = sum(1 for x in out if x["result"] == "win")
+    loss = sum(1 for x in out if x["result"] == "loss")
+    settled = win + loss
+    return jsonify({
+        "ok": True, "count": n, "settled": settled,
+        "win": win, "loss": loss,
+        "win_rate": round(100 * win / settled, 1) if settled else None,
+        "rows": out,
+    })
 
 
 @app.route("/api/gold/breaks")

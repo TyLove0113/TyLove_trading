@@ -228,6 +228,36 @@
   <div id="tgDiag"></div>
 </div>
 
+<!-- 每日觀察記錄（2026-11-09）-->
+<div class="card p-4 mb-5">
+  <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+    <div class="text-sm font-semibold">📋 每日觀察記錄</div>
+    <div class="flex gap-2">
+      <button onclick="backfillObserve()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">回補 30 日</button>
+      <button onclick="loadObserve()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">重新載入</button>
+    </div>
+  </div>
+  <div class="text-xs text-slate-400 mb-3 leading-relaxed">
+    每日記錄一件事：<b class="text-sky-300">今日有明顯方向嗎？</b>
+    效率 = 淨移動 ÷ 全日振幅，> 0.50 當「有方向」。
+    <b>純記錄，唔影響任何訊號同落單。</b>
+  </div>
+  <div id="observeBox" class="text-xs text-slate-400">載入中…</div>
+</div>
+
+<!-- 訊號回溯（2026-11-09）-->
+<div class="card p-4 mb-5">
+  <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+    <div class="text-sm font-semibold">🕘 訊號回溯（歷史紀錄）</div>
+    <button onclick="loadSigHist()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600">重新載入</button>
+  </div>
+  <div class="text-xs text-slate-400 mb-3 leading-relaxed">
+    由第一筆到最新，逐筆列出系統出過嘅訊號同結果。
+    <b class="text-sky-300">贏／輸＝虛擬倉結算結果</b>（唔係你真實交易）。
+  </div>
+  <div id="sigHistBox" class="text-xs text-slate-400">載入中…</div>
+</div>
+
 <!-- 真假突破記錄（2026-11-02）-->
 <div class="card p-4 mb-5">
   <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -870,6 +900,102 @@ async function loadHist(){
   } catch (e) { box.textContent = '讀取失敗'; }
 }
 
+// ==================== 每日觀察記錄（2026-11-09）====================
+async function loadObserve(){
+  const box = $('observeBox');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/api/gold/observe?limit=60')).json();
+    const rows = (d.rows || []).slice().reverse();
+    if (!rows.length) {
+      box.innerHTML = '<div class="text-slate-500">仲未有記錄。撳「回補 30 日」由歷史 K 線補返。</div>';
+      return;
+    }
+    const st = d.stats || {};
+    let h = `<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">`;
+    h += `<div class="p-2 rounded bg-slate-800/60"><div class="text-[10px] text-slate-500">近 7 日</div>
+          <div class="text-sm font-semibold">${st.days || 0} 日</div></div>`;
+    h += `<div class="p-2 rounded bg-slate-800/60"><div class="text-[10px] text-slate-500">有方向</div>
+          <div class="text-sm font-semibold" style="color:#4ade80">${st.dir || 0} 日</div></div>`;
+    h += `<div class="p-2 rounded bg-slate-800/60"><div class="text-[10px] text-slate-500">冇方向</div>
+          <div class="text-sm font-semibold" style="color:#f87171">${st.flat || 0} 日</div></div>`;
+    h += `<div class="p-2 rounded bg-slate-800/60"><div class="text-[10px] text-slate-500">有方向比率</div>
+          <div class="text-sm font-semibold">${st.dir_pct ?? '—'}%</div></div>`;
+    h += `</div>`;
+    h += '<div class="overflow-x-auto"><table class="w-full text-[11px]"><thead class="text-slate-500"><tr>'
+       + '<th class="text-left py-1 pr-2">日期</th><th class="text-left">判斷</th>'
+       + '<th class="text-right">效率</th><th class="text-right">振幅</th>'
+       + '<th class="text-right">淨移動</th><th class="text-right">訊號</th></tr></thead><tbody>';
+    for (const r of rows) {
+      const dir = r.verdict === 'dir';
+      const col = dir ? '#4ade80' : '#f87171';
+      h += `<tr class="border-t border-slate-800">`
+        + `<td class="py-1 pr-2 whitespace-nowrap">${r.date}</td>`
+        + `<td style="color:${col}">${dir ? '✅ 有方向' : '❌ 冇方向'}</td>`
+        + `<td class="text-right">${Number(r.eff||0).toFixed(2)}</td>`
+        + `<td class="text-right">${Number(r.rng||0).toFixed(1)}</td>`
+        + `<td class="text-right">${Number(r.move||0).toFixed(1)}</td>`
+        + `<td class="text-right">${r.sig_count ?? 0}</td></tr>`;
+    }
+    h += '</tbody></table></div>';
+    box.innerHTML = h;
+  } catch(e) { box.textContent = '讀取失敗'; }
+}
+
+async function backfillObserve(){
+  const box = $('observeBox');
+  box.textContent = '回補中…（需要下載 30 日 K 線，約 20–40 秒）';
+  try {
+    const r = await fetch('/api/gold/observe', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({backfill: true, days: 30})
+    });
+    const d = await r.json();
+    box.textContent = d.ok ? `✅ 已回補 ${d.filled} 日` : ('❌ ' + (d.error || '失敗'));
+    setTimeout(loadObserve, 600);
+  } catch(e) { box.textContent = '回補失敗：' + e; }
+}
+
+// ==================== 訊號回溯（2026-11-09）====================
+async function loadSigHist(){
+  const box = $('sigHistBox');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/api/gold/signals/history?limit=200')).json();
+    const rows = d.rows || [];
+    if (!rows.length) {
+      box.innerHTML = '<div class="text-slate-500">仲未有訊號紀錄。</div>';
+      return;
+    }
+    let h = `<div class="text-[11px] text-slate-400 mb-2">`
+      + `共 <b class="text-slate-200">${d.count}</b> 筆　已結算 ${d.settled} 筆　`
+      + `贏 <b style="color:#4ade80">${d.win}</b>　輸 <b style="color:#f87171">${d.loss}</b>　`
+      + `勝率 <b class="text-slate-200">${d.win_rate ?? '—'}%</b></div>`;
+    h += '<div class="overflow-x-auto"><table class="w-full text-[11px]"><thead class="text-slate-500"><tr>'
+       + '<th class="text-left py-1 pr-2">訊號時間</th><th class="text-left">策略</th>'
+       + '<th class="text-left">方向</th><th class="text-right">入場</th>'
+       + '<th class="text-right">止蝕</th><th class="text-right">目標</th>'
+       + '<th class="text-left">結果</th><th class="text-right">R</th></tr></thead><tbody>';
+    for (const r of rows) {
+      const st = r.result;
+      const col = st === 'win' ? '#4ade80' : (st === 'loss' ? '#f87171' : '#94a3b8');
+      const label = st === 'win' ? '✅ 贏' : (st === 'loss' ? '❌ 輸' : '⏳ 未結算');
+      const strat = r.strategy === 'B' ? '🅱️ 延續' : '🅰️ 突破';
+      h += `<tr class="border-t border-slate-800">`
+        + `<td class="py-1 pr-2 whitespace-nowrap">${String(r.ts||'').slice(5,16)}</td>`
+        + `<td class="whitespace-nowrap">${strat}</td>`
+        + `<td>${r.dir === 'long' ? '🟢 多' : '🔴 空'}</td>`
+        + `<td class="text-right">${Number(r.entry||0).toFixed(2)}</td>`
+        + `<td class="text-right">${Number(r.stop||0).toFixed(2)}</td>`
+        + `<td class="text-right">${Number(r.target||0).toFixed(2)}</td>`
+        + `<td style="color:${col}">${label}</td>`
+        + `<td class="text-right" style="color:${col}">${r.pnl_atr == null ? '—' : (r.pnl_atr>0?'+':'') + Number(r.pnl_atr).toFixed(2)}</td></tr>`;
+    }
+    h += '</tbody></table></div>';
+    box.innerHTML = h;
+  } catch(e) { box.textContent = '讀取失敗'; }
+}
+
 // ==================== 真假突破記錄（2026-11-02）====================
 async function loadBreaks(){
   const box = $('breaksBox');
@@ -949,6 +1075,8 @@ async function loadJournal() {
     loadPaper();
     loadHist();
     loadBreaks();
+    loadObserve();
+    loadSigHist();
   } catch (e) { $('jList').textContent = '載入失敗：' + e; }
 }
 

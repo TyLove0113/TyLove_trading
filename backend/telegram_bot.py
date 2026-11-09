@@ -449,8 +449,9 @@ def _handle(token: str, my_chat, u: dict) -> None:
                             ok = _g.approve_signal(sid, True)
                             _send(token, my_chat,
                                   ("✅ *已批准訊號 #%d*\n\n"
-                                   "MT4 會喺一分鐘內自動落單（只限 demo）。\n"
-                                   "落單後會再有通知。" % sid) if ok
+                                   "MT4 通常喺 *15 秒內*自動落單（只限 demo）。\n"
+                                   "落單成功會有通知；如果超過 5 分鐘仍未落單，\n"
+                                   "系統會自動跳過（價格已偏離）。" % sid) if ok
                                   else "⚠️ 訊號 #%d 已經批過或者唔存在。" % sid)
                         else:
                             _g.approve_signal(sid, False)

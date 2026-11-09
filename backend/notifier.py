@@ -525,3 +525,34 @@ def fmt_gold_early(a: dict) -> str:
         "K 線收盤後如果仍然突破，會再出正式訊號確認。",
         "─ 落單由你本人喺 MT4 執行，記住填 S/L ─",
     ])
+
+def fmt_observe(day: dict, st: dict) -> str:
+    """每日觀察記錄訊息 —— 2026-11-09 加。
+
+    對應「今日有明顯嘅方向嗎？」練習。純記錄，唔係訊號。
+    """
+    d = str(day.get("date") or "")
+    flat = day.get("verdict") != "dir"
+    head = "❌ 冇明顯方向" if flat else "✅ 有明顯方向"
+    eff = float(day.get("eff") or 0)
+    lines = [
+        f"📋 *每日觀察*　{d}",
+        f"{head}（效率 {eff:.2f}）",
+        "",
+        f"振幅 *{float(day.get('rng') or 0):.2f}* 美元",
+        f"淨移動 *{float(day.get('move') or 0):.2f}* 美元",
+        f"開 {float(day.get('o') or 0):.2f}　高 {float(day.get('h') or 0):.2f}"
+        f"　低 {float(day.get('l') or 0):.2f}　收 {float(day.get('c') or 0):.2f}",
+        f"系統訊號 *{day.get('sig_count', 0)}* 筆",
+    ]
+    if st and st.get("days"):
+        lines += [
+            "",
+            f"── 近 {st['days']} 日 ──",
+            f"有方向 *{st['dir']}* 日　冇方向 *{st['flat']}* 日"
+            f"（有方向 {st['dir_pct']}%）",
+            f"平均振幅 {st['avg_rng']}｜平均淨移動 {st['avg_move']}",
+            f"累積訊號 {st['sig_total']} 筆",
+        ]
+    lines += ["", "─ 純記錄，唔影響任何訊號同落單 ─"]
+    return "\n".join(lines)
